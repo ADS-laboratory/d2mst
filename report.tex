@@ -92,10 +92,69 @@ This chapter is devoted to the description of the general architectures, and spe
 Describe the components of your systems: modules/objects/components/services.
 For each component, describe the functionalities it implements, and by who is used.
 
-\section{Protocols and algorithms}
-Communication between components.  UML sequence diagrams go here.
+\subsection{Protocols and Algorithms}
+% Communication between components.  UML sequence diagrams go here.
+% Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
 
-Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
+\subsubsection{Messages}
+Table of all exchanged messages (maybe this it is better to insert this section in chap 3)
+
+% -------------------------------------------------------
+\subsubsection{Failure response protocol}
+
+% First of all let's consider a network which have already converged to a MST. When a link
+% fails:
+% - the MST is broken into two fragments,
+% - the two nodes connected by that link will detect the failure,
+% - a protocol to find a new edge to connect the two fragments will be executed
+% . The protocol is based on the GHS algorithm, which is a distributed algorithm for finding a minimum spanning tree in a connected, undirected graph. The GHS algorithm works by having each node maintain a fragment of the MST, and when a link fails, the two nodes connected by that link will merge their fragments to form a new fragment. The new fragment will then be used to find a new MST.
+
+In a network that converged to a MST, when a tree link $e = (u, v)$ fails (with $u$ the
+parent of $v$ in the current MST) the spanning tree is split into two \emph{fragments}
+that must be reconnected by finding the new minimum-weight outgoing edge (MOE) between
+them.
+
+The failure response proceeds in four phases.
+
+\paragraph{Detection and split.}
+Both endpoints are notified of the failure.
+
+Both endpoints generate a new unique fragment identity. %(we should choose where to explain this)
+
+Node $u$ (the parent) propagates the information of the failure upward toward the root
+$r$ of its fragment. Upon receiving this notification, $r$ enters the \emph{reiden} state.
+
+Node $v$ (the child) declares itself the root of its new fragment and enters the
+\emph{reiden} state.
+
+\paragraph{RE-IDENtification.}
+The root broadcasts the change down the tree so that every node in the fragment learns the
+new identity. When nodes change their identity, they acknowledge the change to their
+parent, such that the root can determine when all nodes have been updated.
+
+\paragraph{Minimum outgoing edge search.}
+When the root has received acknowledgements from all its children, it starts the search
+for the MOE.
+
+The root starts an echo wave down the tree to collect information about outgoing edges.
+
+Each node receiving the echo wave:
+\begin{itemize}
+\item collects its outgoing edges (by comparing ids).
+\item decides its local MOE (the minimum-weight outgoing edge among its own outgoing edges
+and those reported by its children).
+\item sends the local MOE to its parent.
+\end{itemize}
+
+When the root has received all replies, it determines the global MOE of the fragment.
+
+\paragraph{Fragment merge.}
+The root sends a message down the tree to inform the node at the MOE that it has been
+selected as the fragment's MOE.
+
+Now:
+- if no other changes: continue like ghs
+- otherwise ...
 
 \section{Physical architecture and deployment}
 Which nodes and platforms involved, and where each component is deployed.
