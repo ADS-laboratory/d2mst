@@ -1,6 +1,6 @@
 \documentclass{memoir}
 
-\title{How to write a Report\\ for the Project of Distributed Systems}
+\title{Dynamic Distributed Minimum Spanning Tree}
 
 \author{Prof. Gabriele Puppis\\ DMIF, University of Udine, Italy}
 
@@ -21,16 +21,45 @@ This document is very brief and succint, and it is by no means comprehensive of 
 
 \chapter{Introduction}\label{ch:intro}
 
-In this chapter you describe the main problem, and an idea of the solution.
-It is not necessary to be very detailed or formal, but it is important to explain which are the main aims and issues from the point of view of Distributed Systems:
+\section{Description of the problem}
+% A description of the application.
+
+This project addresses the problem of maintaining a Minimum-Weight Spanning Tree (MST) in
+a distributed network with dynamic topology. Specifically:
+
 \begin{itemize}
-\item A description of the application.
-\item The overall structure of the implementation: how resources are deployed, which are the players, the r\^oles.
-\item The distributed system features (and the transparencies) and algorithms you intend to implement.
-\item Your plan for testing the system.
-\item A schedule for how you plan to carry our your design and implementation
+\item links can fail and recover at arbitrary times, possibly concurrently,
+\item no central coordinator exists: each node has knowledge only of its local
+environment.
 \end{itemize}
 
+The goal is that, after any sequence of topological changes, the system converges to a
+correct MST of the current network within finite time.
+
+\section{Structure of the implementation}
+% The overall structure of the implementation: how resources are deployed, which are the players, the roles.
+
+\section{Features and Algorithms}
+% The distributed system features (and the transparencies) and algorithms you intend to implement.
+
+Features:
+- fault tolerance
+- asynchrony
+- ...
+
+\section{Testing}
+% Your plan for testing the system.
+
+\section{Schedule}
+% A schedule for how you plan to carry our your design and implementation
+
+\section{Glossary}
+
+\begin{itemize}
+\item Node
+\item Link
+\item Fragment
+\end{itemize}
 
 
 \chapter{Analysis}\label{ch:analysis}
@@ -41,6 +70,12 @@ In this chapter, we describe in detail functional and non-functional requirement
 Which functions must be offered to users / other programs?  Which are the input data and the output data? Which is the expected effect? 
 
 \section{Non functional requirements}
+
+Cheng et al. : PA:
+- eventual consistency: the system reaches a consistent state after a finite time
+- availability (even if possibly not optimal)
+- partition tolerance: non-negotiable since we want a dynamic mst
+
 Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
 
 Are there execution time bounds? Minimum data rates?
