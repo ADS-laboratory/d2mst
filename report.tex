@@ -2,9 +2,10 @@
 
 \title{Dynamic Distributed Minimum Spanning Tree}
 
-\author{Prof. Gabriele Puppis\\ DMIF, University of Udine, Italy}
+\author{Lorenzo Della Giustina\\ matricola
+\and Leonardo Danelutti\\ 158786}
 
-\date{Version 0.3, \today}
+\date{Version 0.1, \today}
 
 \begin{document}
 
@@ -12,53 +13,62 @@
 %\begin{titlingpage}
 \maketitle
 \begin{abstract}
-The aim of this document is to describe how to write a report for the project-exam for the course Distributed Systems, at the University of Udine.
-It is also a guideline for the development of the project itself.
-
-This document is very brief and succint, and it is by no means comprehensive of all the informations that should be given about a software project. You are invited to supplement these guidelines as needed to best describe your work.
+	TODO:
 \end{abstract}
 %\end{titlingpage}
 
 \chapter{Introduction}\label{ch:intro}
 
-\section{Description of the problem}
-% A description of the application.
+In this chapter you describe the main problem, and an idea of the solution.
+It is not necessary to be very detailed or formal, but it is important to explain which are the main aims and issues from the point of view of Distributed Systems:
+\begin{itemize}
+\item A description of the application.
+\item The overall structure of the implementation: how resources are deployed, which are the players, the r\^oles.
+\item The distributed system features (and the transparencies) and algorithms you intend to implement.
+\item Your plan for testing the system.
+\item A schedule for how you plan to carry our your design and implementation
+\end{itemize}
 
-This project addresses the problem of maintaining a Minimum-Weight Spanning Tree (MST) in
-a distributed network with dynamic topology. Specifically:
+A Minimum Spanning Tree (MST) is a subset of the edges of a weighted, connected graph that connects all nodes with the smallest possible total cost. In a distributed setting, it provides an efficient communication backbone, reducing the cost of routing, broadcasting, or coordination while avoiding redundant links.
+
+In many practical distributed networks, however, the topology is not static: links can fail, recover, or change over time. Recomputing the whole MST from scratch can be a solution, but a dynamic solution can lead to faster convergence and lower overhead.
+
+This project addresses the problem of maintaining the Minimum-Weight Spanning Tree (MST) in a distributed network with dynamic topology. Specifically:
 
 \begin{itemize}
-\item links can fail and recover at arbitrary times, possibly concurrently,
+\item links and nodes can fail and recover at arbitrary times, possibly concurrently,
 \item no central coordinator exists: each node has knowledge only of its local
 environment.
 \end{itemize}
 
-The goal is that, after any sequence of topological changes, the system converges to a
-correct MST of the current network within finite time.
+The goal is that, after any sequence of topological changes, the system converges to a correct MST of the current network within finite time.
 
-\section{Structure of the implementation}
-% The overall structure of the implementation: how resources are deployed, which are the players, the roles.
+The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
 
-\section{Features and Algorithms}
-% The distributed system features (and the transparencies) and algorithms you intend to implement.
+Algoritmi
 
-Features:
-- fault tolerance
-- asynchrony
-- ...
 
-\section{Testing}
-% Your plan for testing the system.
+\subsection{Related work}
+- Quello O(|V|)
+- Quello dove abbiamo preso spunto
+- sincorni che poi possono venire syncornizzati
+- Si puo risolvere anche con un algoitmo che mantiene tutta la topologia del grafo nei nodi
 
-\section{Schedule}
-% A schedule for how you plan to carry our your design and implementation
+
+Spiegare brevemente il nostro algoritmo
+
+% TODO: Your plan for testing the system. A schedule for how you plan to carry out your design and implementation
+
 
 \section{Glossary}
 
 \begin{itemize}
-\item Node
-\item Link
-\item Fragment
+\item \textbf{Node}: a process/machine in the distributed system (a graph vertex) that runs the protocol and exchanges messages.
+\item \textbf{Link}: the communication channel between two neighboring nodes (network-level connection, often mapped to a graph adjacency).
+\item \textbf{Edge}: the graph abstraction of a link, usually with an associated weight/cost used by MST logic.
+\item \textbf{Fragment}: a partial tree built during the distributed MST algorithm; each fragment is a connected component (with respect to the tree) that will be merged with others.
+\item \textbf{Cross-edge}: an edge that connects two nodes belonging to different fragments.
+\item \textbf{Internal-edge}: an edge whose endpoints are in the same fragment.
 \end{itemize}
 
 
@@ -67,20 +77,27 @@ Features:
 In this chapter, we describe in detail functional and non-functional requirements of a solution for the problem.
 
 \section{Functional requirements}
-Which functions must be offered to users / other programs?  Which are the input data and the output data? Which is the expected effect? 
+% Which functions must be offered to users / other programs?  Which are the input data and the output data? Which is the expected effect?
+No specific interface is required: the system should be able to operate without any external interface. In order to conduct tests and evaluate the system, a minimal service for performing link and node operations is provided, as well as a monitoring service for observing the system's state.
+
 
 \section{Non functional requirements}
 
-Cheng et al. : PA:
-- eventual consistency: the system reaches a consistent state after a finite time
-- availability (even if possibly not optimal)
-- partition tolerance: non-negotiable since we want a dynamic mst
+The system must be fault tolerant, in particular it must have the property of eventual consistency: edge and node can fail or be temporarily unavailable, so the service must keep operating and converge to a correct state after a finite amount of time. The whole system should be transparent to the user: they should be unaware, or at least don't be bother, of elimination or addition of link of edges while performing communications based on the MST.
 
-Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
 
-Are there execution time bounds? Minimum data rates?
+% Cheng et al. : PA:
+% - eventual consistency: the system reaches a consistent state after a finite time
+% - availability (even if possibly not optimal)
+% - partition tolerance: non-negotiable since we want a dynamic mst
 
-If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services). 
+% Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
+
+
+
+% Are there execution time bounds? Minimum data rates?
+
+% If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services).
 
 
 
@@ -95,6 +112,9 @@ For each component, describe the functionalities it implements, and by who is us
 \subsection{Protocols and Algorithms}
 % Communication between components.  UML sequence diagrams go here.
 % Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
+
+% TODO: Logical model used for the algorithm
+
 
 \subsubsection{Messages}
 Table of all exchanged messages (maybe this it is better to insert this section in chap 3)
