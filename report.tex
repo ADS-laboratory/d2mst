@@ -43,19 +43,22 @@ environment.
 
 The goal is that, after any sequence of topological changes, the system converges to a correct MST of the current network within finite time.
 
-The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
+% TODO: model
 
-Algoritmi
+For static networks, the foundational algorithm by Gallager, Humblet, and Spira (GHS) [1] remains the established standard. While GHS efficiently constructs an MST from scratch in a stable topology, adapting it to a dynamic setting typically involves a naive approach: detecting a topological change and subsequently calling GHS to reconstruct the entire tree. Because global reconstruction requires significant communication overhead for even minor local changes, this approach is highly inefficient in dynamic networks where link insertions, deletions, and weight changes are frequent. To bypass the prohibitive costs of full tree reconstruction, several algorithms have been developed to repair the MST locally.
 
+The standard procedure for maintaining the MST after an edge insertion leverages a fundamental graph property: adding a new link to a tree creates exactly one cycle, and the edge that must be removed to restore the MST is the one with the maximum weight within that cycle. When a new link is added, the two endpoint nodes initiate a process to identify this cycle along their path in the tree. The nodes collaborate to find the maximum-weight edge in the cycle, which is then deleted and replaced by the newly inserted link if the new link has a lower weight [2]. Proper care and synchronization must be taken to ensure that the MST remains globally valid when concurrent edge insertions and deletions occur.
 
-\subsection{Related work}
-- Quello O(|V|)
-- Quello dove abbiamo preso spunto
-- sincorni che poi possono venire syncornizzati
-- Si puo risolvere anche con un algoitmo che mantiene tutta la topologia del grafo nei nodi
+Handling edge deletions is more complex, and various approaches have been proposed to navigate the trade-off between message complexity and memory overhead. All of these approaches rely on the core principle underlying Kruskal's algorithm. Just as Kruskal's algorithm builds an MST by iteratively merging disjoint forest fragments using the globally minimum-weight available edge, an edge deletion essentially returns the network to an intermediate state of this process. The deletion partitions the MST into two disjoint fragments; to restore the tree, the algorithms must effectively resume Kruskal's greedy strategy by identifying and adding the absolute minimum-weight edge crossing the cut between these two components.
 
+Cheng, Cimet, and Kumar [2] proposed an updated variant of GHS that testes for crossing edges by checking each link. Their algorithm achieves $O(|E|)$ message complexity for link deletions. Furthermore, it avoids heavy spatial requirements, requiring each node to maintain only $O(\Delta \log N)$ bits of memory (where $\Delta$ is the node's degree).
 
-Spiegare brevemente il nostro algoritmo
+Beyond dedicated MST repair protocols, the problem can also be solved by adapting general dynamic topology maintenance algorithms. Approaches that continuously maintain the underlying topology of the network at each node (such as traditional link-state routing protocols) can be utilized to quickly find the minimum-weight crossing edge and add it to the MST with $O(N)$ message complexity. However, this inherently requires $O(|E| \log N)$ storage overhead in each node to maintain the global graph view. A more spatially optimized approach in this direction by Awerbuch, Cidon, and Kutten reduces this requirement, maintaining the $O(N)$ message complexity while requiring only $O(\Delta N \log N)$ storage per node.
+
+%TODO: change this section
+Another approach to managing the complexity of dynamic and asynchronous environments is the use of a synchronous MST algorithm layered over a network synchronizer (such as Awerbuch's synchronizers). Designing the protocol for a purely synchronous setting—where execution proceeds in strict, lock-step rounds—greatly simplifies the logic and correctness proofs. However, simulating these clock pulses in an asynchronous environment introduces significant continuous overhead. Depending on the synchronizer class used, maintaining the synchronous abstraction adds a baseline message complexity of $O(|E|)$ or $O(N \log N)$ per round, which severely exacerbates the total communication cost when the network topology changes frequently.
+
+An another approach by King, Kutten, and Thorup [4] introduced a mechanism for the repair of an MST without the need for additional local storage. Their algorithm demonstrates that tree repair can be accomplished with an $O(N \log N / \log \log N)$ communication complexity and only $O(\log N)$ local storage. To achieve this repair, they perform a distributed binary search over the set of crossing edge weights to efficiently locate the minimum-weight edge connecting the two fragmented MSTs. Our solution builds upon the binary search concept proposed by King, Kutten, and Thorup [4]. However, it utilizes a simplified architectural approach that requires fewer communication rounds per iteration, achieving a highly efficient and practical message complexity of $O(N \log N)$.
 
 % TODO: Your plan for testing the system. A schedule for how you plan to carry out your design and implementation
 
@@ -108,6 +111,8 @@ This chapter is devoted to the description of the general architectures, and spe
 \section{Logical architecture}
 Describe the components of your systems: modules/objects/components/services.
 For each component, describe the functionalities it implements, and by who is used.
+
+The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
 
 \subsection{Protocols and Algorithms}
 % Communication between components.  UML sequence diagrams go here.
