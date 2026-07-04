@@ -1,0 +1,282 @@
+\chapter{Project}
+
+This chapter is devoted to the description of the general architectures, and specific algorithms.
+
+\section{Logical architecture}
+% Describe the components of your systems: modules/objects/components/services.
+% For each component, describe the functionalities it implements, and by who is used.
+
+The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
+
+\section{Logical architecture}
+Describe the components of your systems: modules/objects/components/services.
+For each component, describe the functionalities it implements, and by who is used.
+
+\subsection{Protocols and Algorithms}
+% Communication between components.  UML sequence diagrams go here.
+% Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
+
+\subsubsection{Messages}
+\newcommand{\msg}[1]{\textsc{#1}\xspace}
+Table of all exchanged messages (maybe this it is better to insert this section in chap 3)
+
+\subsubsection{Failure response protocol}
+
+% First of all let's consider a network which have already converged to a MST. When a link
+% fails:
+% - the MST is broken into two fragments,
+% - the two nodes connected by that link will detect the failure,
+% - a protocol to find a new edge to connect the two fragments will be executed
+% . The protocol is based on the GHS algorithm, which is a distributed algorithm for finding a minimum spanning tree in a connected, undirected graph. The GHS algorithm works by having each node maintain a fragment of the MST, and when a link fails, the two nodes connected by that link will merge their fragments to form a new fragment. The new fragment will then be used to find a new MST.
+
+In a network that has converged to a minimum spanning tree, when a tree link
+$e = (u, v)$ fails (with $u$ the parent of $v$ in the current MST), the spanning tree
+is split into two \emph{fragments} that must be reconnected by finding the new
+minimum-weight outgoing edge (MOE) between them.
+The response proceeds in four phases. Phases 1, 2, and 4 are shared between both protocol
+variants; Phase 3 admits two implementations with different complexity and correctness
+guarantees.
+
+\paragraph{Detection and split.}
+
+Both endpoints of the failed link are notified of the failure.
+
+Both endpoints generate a new unique fragment identity. %(we should choose where to explain this) (both nodes generate it?)
+
+Node $v$ (the child) immediately declares itself the root of its new fragment and enters
+the \emph{reiden} state.
+
+Node $u$ (the parent) propagates the information of the failure upward toward the root
+$r$ of its fragment. Upon receiving this notification, $r$ enters the \emph{reiden} state.
+
+\paragraph{RE-IDENtification.}
+
+The root broadcasts the change down the tree so that every node in the fragment learns the
+new identity.
+
+Each receiving node updates its local identity, enters the \emph{reiden} state, and
+forwards the message to its children.
+
+Leaf nodes immediately acknowledge the change; internal nodes wait until acknowledgements
+have been received from \emph{all} children before propagating the echo upward.
+
+When the root collects acknowledgements from every child, every node in the fragment
+shares the same identity and this phase is complete.
+
+\paragraph{Minimum outgoing edge search.}
+
+The goal of this phase is to identify the minimum-weight edge crossing the boundary
+between the fragment $F$ and the rest of the network.
+Two algorithms with different properties are provided.
+
+\subparagraph{Naive.}
+
+The root starts an echo wave down the tree to collect information about outgoing edges.
+
+Each node receiving the echo wave:
+\begin{itemize}
+\item collects its outgoing edges by comparing its own identity with the identities
+reported by its neighbors. To do so, it sends a \textsc{Test} message in each non-tree
+link, together with its own identity. The neighbor replies positively if its identity is
+different. The neighbors that replied positively are connected by outgoing edges, and
+their weights are reported back to the sender.
+\item decides its local MOE (the minimum-weight outgoing edge among its own outgoing edges
+and those reported by its children).
+\item sends the local MOE to its parent.
+\end{itemize}
+
+When the root has received all replies, it determines the global MOE of the fragment. If
+no outgoing edge was found the protocol terminates, as the fragment is isolated from the
+rest of the network. Otherwise, the root enters the \emph{merge} state and proceeds to the
+next phase.
+
+This implementation is simple and deterministic, but its message complexity is $O(e)$
+since every node must test all its incident edges.
+
+\subparagraph{Binary search.}
+
+% TODO: citation https://arxiv.org/pdf/1502.03320
+
+For dense networks where $e = \Omega(n\log n)$, the $O(e)$ cost of the naive phase 3
+dominates the overall failure-response complexity.
+
+We propose an alternative approach to lower the complexity to $O(n\log n)$ in the average
+case.
+
+\noindent\textbf{TestOut: XOR-based crossing-edge existence detection.}
+
+Property: a crossing edge is incident to exactly one node in the fragment, while an
+internal edge is incident to two nodes in the fragment.
+
+The idea of the \textsc{TestOut} primitive is to exploit this property to determine
+whether any crossing edge exists in a given weight interval $[a,b]$ by computing the
+XOR of the identifiers of all edges in that interval:
+\begin{itemize}
+\item Internal edges are counted twice (once by each endpoint) and therefore cancel out in
+the XOR: $a \oplus a = 0$.
+\item Crossing edges are counted only once (by the endpoint in the fragment) and therefore
+remain in the XOR. % TODO: argue about possible conflicts
+\end{itemize}
+
+In particular, each edge $e = (u,v)$ is assigned a unique identifier $\mathrm{id}(e) =
+(\min(u,v), \max(u,v))$.
+
+Each node computes the XOR of the hashes of the identifiers of its incident edges whose
+weights fall in $[a,b]$:
+$
+x_v = \bigoplus_{e \in \delta(v) \cap [a,b]} H\left(s_{\mathrm{sk}} \;\|\; \mathrm{id}(e)\right)
+$
+
+The root collects the $x_v$ values from all nodes in the fragment and aggregates:
+$
+X = \bigoplus_{v \in V(F)} x_v
+$
+
+If $X = 0$, no crossing edge exists in the interval; otherwise, at least one crossing edge
+exists.
+
+This procedure is just a broadcast (of the interval% and a random seed
+) followed by an echo (of the local XOR values), and therefore costs $O(n)$ messages.
+
+% TODO: hash function formalization
+
+% TestOut
+
+\noindent\textbf{The binary search.}
+
+Now that we can test for the existence of crossing edges in a given weight interval, we
+can perform a binary search over the range of possible edge weights to find the
+minimum-weight crossing edge.
+
+\begin{enumerate}
+ 
+    \item \textbf{Initialize.}
+        The root sets the search interval $[a,b] \gets [1, W]$, where $W$ is the
+        maximum possible edge weight, known to all nodes as a system parameter.
+
+    \item \textbf{Check existence.}
+        Run \textsc{TestOut}$(F,\,1,\,W)$.
+        If the result is zero, no crossing edge exists, the root broadcasts
+        \msg{GoSleep} and all nodes enter the \emph{sleep} state.
+        Otherwise continue.
+ 
+    \item \textbf{Estimate the median.}
+        The root broadcasts the current interval $[a,b]$ together with a fresh
+        random seed $s_{\mathrm{sk}}$. % can we use always the same seed?
+        Each node $v$ assigns a \emph{priority} to each of its incident non-tree
+        edges $e$ whose weight falls in $[a,b]$:
+        \[
+            \mathrm{priority}(e)
+            \;=\;
+            H\!\left(s_{\mathrm{sk}} \;\|\; \mathrm{id}(e)\right),
+        \]
+        where $H$ is a seeded hash function (e.g.\ SHA-256 truncated to 64 bits)
+        and $\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$ is the canonical
+        symmetric edge identifier.
+        Each node retains only the $k$ edges with the \emph{smallest} priority
+        values (its local bottom-$k$ sketch), discarding all others.
+          
+        During the convergecast, each internal node merges its own sketch with
+        those received from its children, deduplicates by edge identifier, and
+        forwards the $k$ globally smallest priorities to its parent.
+        The root collects approximately $k$ uniformly random non-tree edges from
+        across the fragment; the \textbf{median of their weights} is used as the
+        split point~$m$.
+
+        The parameter $k$ is a configurable constant (e.g.\ $k = O(\log n)$) that
+        controls the quality of the median estimate: larger $k$ yields a more
+        balanced split but increases per-round message size.
+
+          % TODO: evaluate other possible median calculation methods, e.g., using a distributed selection algorithm.
+ 
+    \item \textbf{Test both halves.}
+          Run \textsc{TestOut} on $[a,m]$ and $[m{+}1,b]$. The root narrows the search to
+          the \emph{lighter} sub-interval that contains at least one crossing edge:
+          \[
+              [a,b] \;\gets\;
+              \begin{cases}
+                  [a,\,m]     & \text{if } \textsc{TestOut} [a,\,m] \neq 0 \\
+                  [m{+}1,\,b] & \text{otherwise.}
+              \end{cases}
+          \]
+ 
+    \item \textbf{Iterate.}
+          Because $m$ splits $[a,b]$ near its median, the interval length halves on
+          average at each step.
+          After $O(\log W)$ iterations the interval collapses to a single weight value
+          $a = b = w^*$, uniquely identifying the MOE weight.
+ 
+    \item \textbf{Identify the edge.}
+          When $a = b = w^*$, the root broadcasts $w^*$.
+          Since edge weights are globally distinct (a standing assumption of the
+          protocol), at most one node $p$ in $F$ holds an incident non-tree edge of
+          weight~$w^*$.
+          Node $p$ sends $\textsc{Test}\langle id \rangle$ over that edge; since the binary
+          search confirmed a crossing edge at weight $w^*$, the response is guaranteed
+          to be \textsc{Accept}.
+          Node $p$ thereby becomes the confirmed MOE holder and proceeds to Phase~4.
+ 
+\end{enumerate}
+
+\smallskip
+\noindent\emph{Collisions:} 
+
+\smallskip
+\noindent\emph{Correctness:} Probabilistic, $1 - n^{-c}$ for configurable $c$, under
+the assumption that edge weights are integers in $[1,W]$ with $W = \mathrm{poly}(n)$.
+ 
+\smallskip
+\noindent\emph{Complexity:} Each iteration of Steps~3--4 costs $O(n)$ messages
+(a constant number of broadcast-and-echo operations, each $O(n)$).
+After $O(\log W) = O(\log n)$ iterations the total is $\mathbf{O(n\log n)}$ messages
+per failure.
+ 
+% ---- COMPARISON TABLE -------------------------------------------
+\subparagraph{Comparison.}
+\label{sec:moe-comparison}
+ 
+Table~\ref{tab:moe-comparison} summarises the trade-offs between the two Phase~3
+implementations.
+The sketch-based approach dominates for dense graphs; the baseline is preferable
+for sparse graphs and whenever deterministic correctness is required.
+ 
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{p{3.0cm} p{2.5cm} p{2.8cm} p{3.4cm} p{2.4cm}}
+\toprule
+\textbf{Implementation} & \textbf{Msg.\ per failure} & \textbf{Correctness}
+    & \textbf{Extra assumptions} & \textbf{Prefer when} \\
+\midrule
+TEST-based (baseline)
+    & $O(e)$
+    & Deterministic
+    & None beyond
+    & $e = O(n\log n)$ \\[4pt]
+Sketch-based (optimised)
+    & $O(n\log W)$
+    & Prob.\ $(1 - n^{-c})$
+    & Weights in $[1,W]$, $W = \mathrm{poly}(n)$
+    & $e = \Omega(n\log n)$ \\
+\bottomrule
+\end{tabular}
+\caption{Trade-offs between MOE search implementations.
+         $e$ is the number of network edges; $W$ is the maximum edge weight;
+         $n$ is the number of nodes.}
+\label{tab:moe-comparison}
+\end{table}
+
+\paragraph{Fragment merge.}
+The root sends a message down the tree to inform the node at the MOE that it has been
+selected as the fragment's MOE.
+
+Now:
+- if no other changes: continue like ghs
+- otherwise ...
+
+\subsubsection{Recovery response protocol}
+\section{Physical architecture and deployment}
+Which nodes and platforms involved, and where each component is deployed.
+
+\section{Development plan}
+Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system level.
