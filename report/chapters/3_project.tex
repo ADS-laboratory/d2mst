@@ -225,7 +225,7 @@ minimum-weight crossing edge.
  
     \item \textbf{Estimate the median.}
         The root broadcasts the current interval $[a,b]$ together with a fresh
-        random seed $s_{\mathrm{sk}}$. % can we use always the same seed?
+        random seed $s_{\mathrm{sk}}$. % can we use always the same seed? % Why use it?
         Each node $v$ assigns a \emph{priority} to each of its incident non-tree
         edges $e$ whose weight falls in $[a,b]$:
         \[
@@ -283,11 +283,17 @@ minimum-weight crossing edge.
 least one crossing edge exists in the interval. However, it may have false negatives if
 two or more crossing edges exist in the interval and their identifiers happen to cancel
 out in the XOR.
-For a non-empty set $S$ of crossing edges with independent 64-bit hash values,
+For a non-empty set $S$ of crossing edges with independent m-bit hash values,
 \[
   \Pr\!\left[\bigoplus_{e \in S} h_{\mathrm{xor}}(e) = 0\right]
-  \;=\; ...,
+  \;=\; 2^{-m}
 \]
+
+This follows because the XOR of independent, uniformly distributed $m$-bit
+values is itself uniformly distributed over the $2^m$ possible bit patterns.
+Therefore the aggregate hash is equally likely to be any $m$-bit string, and
+the probability of obtaining the all-zero value is exactly $1/2^m$.
+
 
 \paragraph{Fragment merge.}
 
@@ -320,6 +326,7 @@ fragment identity.
 If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
 the recovered link is a candidate outgoing edge. It will be considered as a potential MOE
 during the next \msg{FindMoe} phase initiated by either fragment.
+% Non credo funzioni, bisogna aspettare che finisca l'eliminazione. Non sai quando il link viene aggiunto
  
 \paragraph{Same fragment.}
 If $u$ and $v$ are in the same fragment (i.e., they have the same fragment identity), the
@@ -327,7 +334,21 @@ recovered link $e$ introduces a cycle with the existing tree edges.
 
 To preserve the MST property, the maximum-weight edge in that cycle must be identified and
 removed. The recovery response proceeds in three phases.
- 
+
+% TODO: Simultaneous recoveries: 
+% - if cycles are different the changes can be performed simultaneously
+% - if cycles have edges in common, order does not metter: a node that receives two recovery 
+%   messages waits for an operation to complete before forwarding the second message.
+%   (explain me why this does not lead into deadlocks)
+
+% TODO: Failure during recovery:
+% - If u is a lca of a recovery event during a deletion: u will hold the REPLACE message until
+%   the failure is resolved.
+% - A link in the cycle fails during the recovery: the messages will be discarded because they
+%   contain the old fragment identity.
+
+% TODO: When changing the graph because of a recovery we need to hold messages
+
 \subparagraph{LCA.}
 If $u$ and $v$ share the same fragment identity, each sends a
 \msg{Recovery}$\langle id,\, w(e),\, w \rangle$ message toward the root of the fragment,

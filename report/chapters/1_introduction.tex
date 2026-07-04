@@ -24,7 +24,6 @@ environment.
 
 The goal is that, after any sequence of topological changes, the system converges to a correct MST of the current network within finite time.
 
-
 \subsection{Related Work}
 
 For static networks, the foundational algorithm by Gallager, Humblet, and Spira (GHS) [1] remains the established standard. While GHS efficiently constructs an MST from scratch in a stable topology, adapting it to a dynamic setting typically involves a naive approach: detecting a topological change and subsequently calling GHS to reconstruct the entire tree. Because global reconstruction requires significant communication overhead for even minor local changes, this approach is highly inefficient in dynamic networks where link insertions, deletions, and weight changes are frequent. To bypass the prohibitive costs of full tree reconstruction, several algorithms have been developed to repair the MST locally.
@@ -40,6 +39,15 @@ Beyond dedicated MST repair protocols, the problem can also be solved by adaptin
 An another approach by King, Kutten, and Thorup [4] introduced a mechanism for the repair of an MST without the need for additional local storage. Their algorithm demonstrates that tree repair can be accomplished with an $O(N \log N / \log \log N)$ communication complexity and only $O(\log N)$ local storage. To achieve this repair, they perform a distributed binary search over the set of crossing edge weights to efficiently locate the minimum-weight edge connecting the two fragmented MSTs. Our solution builds upon the binary search concept proposed by King, Kutten, and Thorup [4]. However, it utilizes a simplified architectural approach that requires fewer communication rounds per iteration, achieving a highly efficient but with message complexity of $O(N \log N)$.
 
 % TODO: Your plan for testing the system. A schedule for how you plan to carry out your design and implementation
+
+\subsection{TODO:}
+what we acctualy need to do: a system where each node ..
+
+Testing: 
+- Simple edge insertions and deletion
+- Simple node failures and recoveries
+- random concurrent insertions and deletions
+- Full system simulation: Add and delete node/edges at radom times with different rates  
 
 
 \section{Glossary}
