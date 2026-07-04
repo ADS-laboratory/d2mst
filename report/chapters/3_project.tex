@@ -1,3 +1,5 @@
+\newcommand{\msg}[1]{\textsc{#1}\xspace}
+
 \chapter{Project}
 
 This chapter is devoted to the description of the general architectures, and specific algorithms.
@@ -17,22 +19,83 @@ For each component, describe the functionalities it implements, and by who is us
 % Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
 
 \subsubsection{Messages}
-\newcommand{\msg}[1]{\textsc{#1}\xspace}
-Table of all exchanged messages (maybe this it is better to insert this section in chap 3)
+
+Table~\ref{tab:messages} lists every message type exchanged during protocol
+execution. Every message carries the sender's current \emph{fragment identity}
+so that nodes can silently discard messages belonging to superseded protocol
+rounds — a crucial mechanism for correctness when failures and recoveries
+overlap in time.
+ 
+\begin{table}[ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{p{4.0cm} p{3.0cm} p{2.8cm} p{4.4cm}}
+\toprule
+\textbf{Message} & \textbf{Direction} & \textbf{Payload} & \textbf{Purpose} \\
+\midrule
+\msg{Failure}$\langle id \rangle$
+  & child $\to$ parent
+  & new fragment id
+  & Propagate tree-link failure notification toward the root. \\
+ 
+\msg{Reiden}$\langle id \rangle$
+  & root $\to$ all (broadcast)
+  & new fragment id
+  & Disseminate the new fragment identity after a split. \\
+ 
+\msg{ReidenAck}$\langle id \rangle$
+  & leaves $\to$ root (echo)
+  & fragment id
+  & Acknowledge receipt of the new identity. \\
+ 
+\msg{FindMoe}$\langle id \rangle$
+  & root $\to$ all (broadcast)
+  & fragment id
+  & Initiate the search for the minimum outgoing edge. \\
+ 
+\msg{Test}$\langle id \rangle$
+  & node $\to$ non-tree neighbor
+  & fragment id
+  & Query whether a non-tree link crosses the fragment boundary. \\
+ 
+\msg{Accept}$\langle id \rangle$
+  & neighbor $\to$ node
+  & fragment id
+  & Confirm the tested link is outgoing (crosses boundary). \\
+ 
+\msg{Reject}$\langle id \rangle$
+  & neighbor $\to$ node
+  & fragment id
+  & Confirm the tested link is internal (same fragment). \\
+ 
+\msg{FindMoeAck}$\langle id, w \rangle$
+  & leaves $\to$ root (echo)
+  & fragment id, min weight
+  & Report the local minimum outgoing edge weight upward. \\
+
+\msg{GoSleep}
+  & root $\to$ all (broadcast)
+  & ---
+  & Signal that no outgoing edge exists; enter sleep state. \\
+
+\bottomrule
+\end{tabular}
+\caption{Message types used in the d2mst protocol.}
+\label{tab:messages}
+\end{table}
+
+% TODO: explain that every messages carries the sender's current fragment identity so that
+% nodes can discard messages belonging to superseded protocol rounds
 
 \subsubsection{Failure response protocol}
-
-% First of all let's consider a network which have already converged to a MST. When a link
-% fails:
-% - the MST is broken into two fragments,
-% - the two nodes connected by that link will detect the failure,
-% - a protocol to find a new edge to connect the two fragments will be executed
-% . The protocol is based on the GHS algorithm, which is a distributed algorithm for finding a minimum spanning tree in a connected, undirected graph. The GHS algorithm works by having each node maintain a fragment of the MST, and when a link fails, the two nodes connected by that link will merge their fragments to form a new fragment. The new fragment will then be used to find a new MST.
 
 In a network that has converged to a minimum spanning tree, when a tree link
 $e = (u, v)$ fails (with $u$ the parent of $v$ in the current MST), the spanning tree
 is split into two \emph{fragments} that must be reconnected by finding the new
 minimum-weight outgoing edge (MOE) between them.
+
+%TODO: figure showing the split and the two fragments.
+
 The response proceeds in four phases. Phases 1, 2, and 4 are shared between both protocol
 variants; Phase 3 admits two implementations with different complexity and correctness
 guarantees.
@@ -118,8 +181,8 @@ the XOR: $a \oplus a = 0$.
 remain in the XOR. % TODO: argue about possible conflicts
 \end{itemize}
 
-In particular, each edge $e = (u,v)$ is assigned a unique identifier $\mathrm{id}(e) =
-(\min(u,v), \max(u,v))$.
+In particular, each edge $e = (u,v)$ is assigned a symmetric unique identifier
+$\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$.
 
 Each node computes the XOR of the hashes of the identifiers of its incident edges whose
 weights fall in $[a,b]$:
@@ -170,24 +233,21 @@ minimum-weight crossing edge.
             \;=\;
             H\!\left(s_{\mathrm{sk}} \;\|\; \mathrm{id}(e)\right),
         \]
-        where $H$ is a seeded hash function (e.g.\ SHA-256 truncated to 64 bits)
-        and $\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$ is the canonical
-        symmetric edge identifier.
-        Each node retains only the $k$ edges with the \emph{smallest} priority
-        values (its local bottom-$k$ sketch), discarding all others.
+        Each node retains only the $k$ edges with the \emph{smallest} priority values,
+        discarding all others.
           
-        During the convergecast, each internal node merges its own sketch with
-        those received from its children, deduplicates by edge identifier, and
-        forwards the $k$ globally smallest priorities to its parent.
+        During the convergecast, each internal node merges its own set of edges with those
+        received from its children, deduplicates by edge identifier, and forwards the $k$
+        globally smallest priorities to its parent.
         The root collects approximately $k$ uniformly random non-tree edges from
         across the fragment; the \textbf{median of their weights} is used as the
         split point~$m$.
 
-        The parameter $k$ is a configurable constant (e.g.\ $k = O(\log n)$) that
-        controls the quality of the median estimate: larger $k$ yields a more
-        balanced split but increases per-round message size.
+        The parameter $k$ is a configurable constant that controls the quality of the
+        median estimate: larger $k$ yields a more balanced split but increases per-round
+        message size.
 
-          % TODO: evaluate other possible median calculation methods, e.g., using a distributed selection algorithm.
+        % TODO: evaluate other possible median calculation methods, e.g., using a distributed selection algorithm.
  
     \item \textbf{Test both halves.}
           Run \textsc{TestOut} on $[a,m]$ and $[m{+}1,b]$. The root narrows the search to
@@ -219,62 +279,72 @@ minimum-weight crossing edge.
 \end{enumerate}
 
 \smallskip
-\noindent\emph{Collisions:} 
-
-\smallskip
-\noindent\emph{Correctness:} Probabilistic, $1 - n^{-c}$ for configurable $c$, under
-the assumption that edge weights are integers in $[1,W]$ with $W = \mathrm{poly}(n)$.
- 
-\smallskip
-\noindent\emph{Complexity:} Each iteration of Steps~3--4 costs $O(n)$ messages
-(a constant number of broadcast-and-echo operations, each $O(n)$).
-After $O(\log W) = O(\log n)$ iterations the total is $\mathbf{O(n\log n)}$ messages
-per failure.
- 
-% ---- COMPARISON TABLE -------------------------------------------
-\subparagraph{Comparison.}
-\label{sec:moe-comparison}
- 
-Table~\ref{tab:moe-comparison} summarises the trade-offs between the two Phase~3
-implementations.
-The sketch-based approach dominates for dense graphs; the baseline is preferable
-for sparse graphs and whenever deterministic correctness is required.
- 
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.35}
-\begin{tabular}{p{3.0cm} p{2.5cm} p{2.8cm} p{3.4cm} p{2.4cm}}
-\toprule
-\textbf{Implementation} & \textbf{Msg.\ per failure} & \textbf{Correctness}
-    & \textbf{Extra assumptions} & \textbf{Prefer when} \\
-\midrule
-TEST-based (baseline)
-    & $O(e)$
-    & Deterministic
-    & None beyond
-    & $e = O(n\log n)$ \\[4pt]
-Sketch-based (optimised)
-    & $O(n\log W)$
-    & Prob.\ $(1 - n^{-c})$
-    & Weights in $[1,W]$, $W = \mathrm{poly}(n)$
-    & $e = \Omega(n\log n)$ \\
-\bottomrule
-\end{tabular}
-\caption{Trade-offs between MOE search implementations.
-         $e$ is the number of network edges; $W$ is the maximum edge weight;
-         $n$ is the number of nodes.}
-\label{tab:moe-comparison}
-\end{table}
+\noindent\emph{Collisions:} The XOR test has no false positives: if $X \neq 0$ then at
+least one crossing edge exists in the interval. However, it may have false negatives if
+two or more crossing edges exist in the interval and their identifiers happen to cancel
+out in the XOR.
+For a non-empty set $S$ of crossing edges with independent 64-bit hash values,
+\[
+  \Pr\!\left[\bigoplus_{e \in S} h_{\mathrm{xor}}(e) = 0\right]
+  \;=\; ...,
+\]
 
 \paragraph{Fragment merge.}
-The root sends a message down the tree to inform the node at the MOE that it has been
-selected as the fragment's MOE.
 
-Now:
-- if no other changes: continue like ghs
-- otherwise ...
+The root sends a message down the tree to inform the node $p$ at the MOE that it needs to
+connect to the neighboring fragment.
+
+Upon receiving this message, $p$ sends \msg{Connect}$\langle id \rangle$ over the MOE to
+the endpoint in the neighboring fragment.
+
+The two fragments then merge into a single extended fragment. If no further topological
+changes have occurred in the meantime, the protocol proceeds identically to GHS: the
+merged fragment elects a new root, generates a new identity, and begins a fresh MOE search
+for the next phase of tree construction.
+
+If a concurrent topological changes have occurred while this process was in progress, the
+fragment identity mechanism handles them correctly: any messages carrying a superseded
+identity are silently discarded, and the most recent failure or recovery initiates a new
+protocol round with a fresh identity. % da qualche parte dobbiamo dire che potrebbero esserci versioni diverse del MST in giro per la rete allo stesso tempo (se un nodo non ha ancora ricevuto il broadcast con il nuovo id)
 
 \subsubsection{Recovery response protocol}
+ 
+When a previously failed link $e = (u,v)$ recovers, two cases arise depending on whether
+its endpoints belong to the same fragment or to different fragments.
+
+To check whether $u$ and $v$ are in the same fragment, each endpoint sends a
+\msg{IdCheck}$\langle id \rangle$ message to the other, where $id$ is the sender's current
+fragment identity.
+ 
+\paragraph{Different fragments.}
+If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
+the recovered link is a candidate outgoing edge. It will be considered as a potential MOE
+during the next \msg{FindMoe} phase initiated by either fragment.
+ 
+\paragraph{Same fragment.}
+If $u$ and $v$ are in the same fragment (i.e., they have the same fragment identity), the
+recovered link $e$ introduces a cycle with the existing tree edges.
+
+To preserve the MST property, the maximum-weight edge in that cycle must be identified and
+removed. The recovery response proceeds in three phases.
+ 
+\subparagraph{LCA.}
+If $u$ and $v$ share the same fragment identity, each sends a
+\msg{Recovery}$\langle id,\, w(e),\, w \rangle$ message toward the root of the fragment,
+where $w(e)$ is the weight of the recovered link and $w$ is the running maximum weight
+along the path traversed so far.
+Each intermediate node $z$ forwards the message to its parent, updating the running
+maximum to $w' = \max\{w,\, w(\text{link to parent of } z)\}$.
+
+The two messages propagate upward until they converge at the \emph{least
+common ancestor} $\mathrm{lca}(u,v)$: the first node that receives two \msg{Recovery}
+messages for the same recovery event, one arriving from the subtree containing $u$ and one
+from the subtree containing $v$.
+At this point $\mathrm{lca}(u,v)$ holds the weight of the heaviest edge in
+the cycle.
+ 
+
+
 \section{Physical architecture and deployment}
 Which nodes and platforms involved, and where each component is deployed.
 
