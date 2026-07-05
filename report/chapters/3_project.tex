@@ -355,6 +355,11 @@ The two messages propagate upward until they converge at the \emph{least
 common ancestor} $\mathrm{lca}(u,v)$: the first node that receives two \msg{Recovery}
 messages for the same recovery event, one arriving from the subtree containing $u$ and one
 from the subtree containing $v$.
+
+The first \msg{Recovery} message to arrive at $\mathrm{lca}(u,v)$ will travel to the root,
+while the second is blocked to avoid parents of $\mathrm{lca}(u,v)$ mistakenly receiving
+two \msg{Recovery} messages and incorrectly concluding that they are the LCA.
+
 At this point $\mathrm{lca}(u,v)$ holds the weight of the heaviest edge in
 the cycle.
 
@@ -380,9 +385,43 @@ to the node that reported the maximum weight $w$ in the cycle:
 
 
 % TODO: deadlock briefly
+\subparagraph{Overlapping cycles serialization.}
 
+Multiple concurrent recoveries within the same fragment may involve overlapping cycles.
 
+Processing them independently may lead to inconsistencies: two LCAs may each remove the
+same edge, leaving a cycle in the MST.
+% TODO: figure similar to fig.1 in the old paper
 
+Naively, we could try to avoid this problem by making nodes that forwarded a
+\msg{Recovery} message wait until the LCA has completed the recovery before forwarding any
+other \msg{Recovery} messages.
+
+However, this approach may lead to deadlocks: two LCAs may each wait for a message that
+has been blocked by the other's recovery process.
+
+% TODO: figure similar to fig.2 in the paper
+ 
+To avoid this, the root serializes recoveries using a token. The serialization order is
+determined by the order in which the root receives \msg{Recovery} messages from its
+children. The first \msg{Recovery} message to arrive is processed immediately, while any
+subsequent \msg{Recovery} messages are queued until the first recovery is complete.
+
+So, when there aren't other recoveries in progress, the root pops the first \msg{Recovery}
+message from its queue and it responds with \msg{Privilege}$\langle id,\, w \rangle$,
+which travels down the same path and then around the cycle, releasing any blocked
+\msg{Recovery}$\langle id,\, w,\, _ \rangle$ messages it encounters. Note that only
+recovery message with $w$ weight (i.e. for the event selected by the root) are released,
+while other recovery messages remain blocked until their turn comes.
+
+A node holding a blocked \msg{Recovery}$\langle id,\, w,\, _ \rangle$ forwards it upon
+receiving \msg{Privilege}$\langle id,\, w \rangle$, allowing the LCA to eventually collect
+both halves of the recovery.
+
+The root thus enforces a total order on concurrent recoveries, eliminating all deadlocks.
+
+% TODO: argue about the fact that even with this procedure, recoveries with
+% non-overlapping cycles are processed concurrently
 
 \paragraph{Different fragments.}
 If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
