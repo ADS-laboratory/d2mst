@@ -25,7 +25,8 @@ execution. Every message carries the sender's current \emph{fragment identity}
 so that nodes can silently discard messages belonging to superseded protocol
 rounds — a crucial mechanism for correctness when failures and recoveries
 overlap in time.
- 
+
+\begin{comment}
 \begin{table}[ht]
 \centering
 \renewcommand{\arraystretch}{1.35}
@@ -83,6 +84,7 @@ overlap in time.
 \caption{Message types used in the d2mst protocol.}
 \label{tab:messages}
 \end{table}
+\end{comment}
 
 % TODO: explain that every messages carries the sender's current fragment identity so that
 % nodes can discard messages belonging to superseded protocol rounds
@@ -156,9 +158,7 @@ next phase.
 This implementation is simple and deterministic, but its message complexity is $O(e)$
 since every node must test all its incident edges.
 
-\subparagraph{Binary search.}
-
-% TODO: citation https://arxiv.org/pdf/1502.03320
+\subparagraph{Binary search.\cite{king2015constructionimprompturepairmst}}
 
 For dense networks where $e = \Omega(n\log n)$, the $O(e)$ cost of the naive phase 3
 dominates the overall failure-response complexity.
@@ -184,10 +184,10 @@ remain in the XOR. % TODO: argue about possible conflicts
 In particular, each edge $e = (u,v)$ is assigned a symmetric unique identifier
 $\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$.
 
-Each node computes the XOR of the hashes of the identifiers of its incident edges whose
-weights fall in $[a,b]$:
+Each node computes the XOR of the identifiers of its incident edges whose weights fall in
+$[a,b]$:
 $
-x_v = \bigoplus_{e \in \delta(v) \cap [a,b]} H\left(s_{\mathrm{sk}} \;\|\; \mathrm{id}(e)\right)
+x_v = \bigoplus_{e \in \delta(v) \cap [a,b]} \mathrm{id}(e)
 $
 
 The root collects the $x_v$ values from all nodes in the fragment and aggregates:
@@ -198,12 +198,8 @@ $
 If $X = 0$, no outgoing edge exists in the interval; otherwise, at least one outgoing edge
 exists.
 
-This procedure is just a broadcast (of the interval% and a random seed
-) followed by an echo (of the local XOR values), and therefore costs $O(n)$ messages.
-
-% TODO: hash function formalization
-
-% TestOut
+This procedure is just a broadcast (of the interval) followed by an echo (of the local XOR
+values), and therefore costs $O(n)$ messages.
 
 \noindent\textbf{The binary search.}
 
@@ -224,10 +220,9 @@ minimum-weight outgoing edge.
         Otherwise continue.
  
     \item \textbf{Estimate the median.}
-        The root broadcasts the current interval $[a,b]$ together with a fresh
-        random seed $s_{\mathrm{sk}}$. % can we use always the same seed? % Why use it?
-        Each node $v$ assigns a \emph{priority} to each of its incident non-tree
-        edges $e$ whose weight falls in $[a,b]$:
+        The root broadcasts the current interval $[a,b]$. Each node $v$ assigns a
+        \emph{priority} to each of its incident non-tree edges $e$ whose weight falls in
+        $[a,b]$:
         \[
             \mathrm{priority}(e)
             \;=\;
@@ -235,19 +230,18 @@ minimum-weight outgoing edge.
         \]
         Each node retains only the $k$ edges with the \emph{smallest} priority values,
         discarding all others.
-          
+
         During the convergecast, each internal node merges its own set of edges with those
         received from its children, deduplicates by edge identifier, and forwards the $k$
         globally smallest priorities to its parent.
-        The root collects approximately $k$ uniformly random non-tree edges from
-        across the fragment; the \textbf{median of their weights} is used as the
-        split point~$m$.
+        The root collects approximately $k$ uniformly random non-tree edges from across
+        the fragment; the \textbf{median of their weights} is used as the split point~$m$.
 
         The parameter $k$ is a configurable constant that controls the quality of the
         median estimate: larger $k$ yields a more balanced split but increases per-round
         message size.
 
-        % TODO: evaluate other possible median calculation methods, e.g., using a distributed selection algorithm.
+        % TODO: How good is the approximation?
  
     \item \textbf{Test both halves.}
           Run \textsc{TestOut} on $[a,m]$ and $[m{+}1,b]$. The root narrows the search to
@@ -329,19 +323,13 @@ recovered link $e$ introduces a cycle with the existing tree edges.
 To preserve the MST property, the maximum-weight edge in that cycle must be identified and
 removed. The recovery response proceeds in three phases.
 
-% TODO: Simultaneous recoveries: 
-% - if cycles are different the changes can be performed simultaneously
-% - if cycles have edges in common, order does not metter: a node that receives two recovery 
-%   messages waits for an operation to complete before forwarding the second message.
-%   (explain me why this does not lead into deadlocks)
-
 % TODO: Failure during recovery:
 % - If u is a lca of a recovery event during a deletion: u will hold the REPLACE message until
-%   the failure is resolved.
+%   the failure is resolved. - FATTO
 % - A link in the cycle fails during the recovery: the messages will be discarded because they
-%   contain the old fragment identity.
+%   contain the old fragment identity. - NON SERVE? (capitolo 4.3)
 
-% TODO: When changing the graph because of a recovery we need to hold messages
+% TODO: When changing the graph because of a recovery we need to hold messages - NON SERVE? (capitolo 4.3)
 
 \subparagraph{LCA.}
 If $u$ and $v$ share the same fragment identity, each sends a
@@ -386,7 +374,7 @@ to the node that reported the maximum weight $w$ in the cycle:
 The recovered link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
 the weight of the maximum-weight edge in the cycle.
 
-% TODO: deadlock briefly
+% TODO: leggere deadlock
 \subparagraph{Overlapping cycles serialization.}
 
 Multiple concurrent recoveries within the same fragment may involve overlapping cycles.
@@ -443,6 +431,53 @@ However, this approach may lead to deadlocks: two LCAs may each wait for a messa
 has been blocked by the other's recovery process.
 
 % TODO: figure similar to fig.2 in the paper
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node/.style={circle, draw, minimum size=5mm, inner sep=0pt},
+    tree_edge/.style={ultra thick, draw=black},
+    recovered_edge/.style={thin, draw=black}
+]
+    % Tree Hierarchy Layout
+    \node[node, label=left:{\small root}] (root) at (0, 5) {};
+    \node[node, label=left:{\small lca($e'$)}] (lca_ep) at (0, 3.8) {};
+    \node[node, label=left:{\small lca($e$)}] (lca_e) at (0, 2.5) {};
+    \node[node, label=below left:{\small $x$}] (x) at (0, 1.2) {};
+    
+    % Left branch nodes
+    \node[node] (mid_l1) at (-2, 2.5) {};
+    \node[node, label=below:{\small $u$}] (u) at (-2, 0) {};
+    
+    % Inner branch nodes
+    \node[node, label=below:{\small $v$}] (v) at (-1, 0) {};
+    \node[node, label=below:{\small $u'$}] (up) at (1, 0) {};
+    
+    % Right branch nodes
+    \node[node] (mid_r1) at (2, 2.5) {};
+    \node[node, label=below:{\small $v'$}] (vp) at (2, 0) {};
+
+    % Draw Tree Edges (Bold)
+    \draw[tree_edge] (root) -- (lca_ep);
+    \draw[tree_edge] (lca_ep) -- (lca_e);
+    \draw[tree_edge] (lca_e) -- (x);
+    
+    \draw[tree_edge] (lca_e) -- (mid_l1);
+    \draw[tree_edge] (mid_l1) -- (u);
+    
+    \draw[tree_edge] (x) -- (v);
+    \draw[tree_edge] (x) -- (up);
+    
+    \draw[tree_edge] (lca_ep) -- (mid_r1);
+    \draw[tree_edge] (mid_r1) -- (vp);
+
+    % Draw Recovered Non-Tree Edges (Thin Horizontal Links)
+    \draw[recovered_edge] (u) -- node[above] {$e$} (v);
+    \draw[recovered_edge] (up) -- node[above] {$e'$} (vp);
+
+\end{tikzpicture}
+\caption{Interaction and deadlock avoidance using privilege tokens at the root.}
+\label{fig:lca_serialization}
+\end{figure}
  
 To avoid this, the root serializes recoveries using a token. The serialization order is
 determined by the order in which the root receives \msg{Recovery} messages from its
@@ -492,4 +527,16 @@ there can be two different cases:
 Which nodes and platforms involved, and where each component is deployed.
 
 \section{Development plan}
-Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system level.
+Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system leve
+
+Tier 1 GHS
+
+Tier 2 Our algorithm:
+- with the O(|E|) phase 3 (naive)
+- with no concurrent failures/recoveries
+
+Tier 3 final with all features.
+
+Tier 4 additional features:
+- other median calculation methods, e.g., using a distributed selection algorithm.
+- ...
