@@ -322,12 +322,6 @@ To check whether $u$ and $v$ are in the same fragment, each endpoint sends a
 \msg{IdCheck}$\langle id \rangle$ message to the other, where $id$ is the sender's current
 fragment identity.
  
-\paragraph{Different fragments.}
-If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
-the recovered link is a candidate outgoing edge. It will be considered as a potential MOE
-during the next \msg{FindMoe} phase initiated by either fragment.
-% Non credo funzioni, bisogna aspettare che finisca l'eliminazione. Non sai quando il link viene aggiunto
- 
 \paragraph{Same fragment.}
 If $u$ and $v$ are in the same fragment (i.e., they have the same fragment identity), the
 recovered link $e$ introduces a cycle with the existing tree edges.
@@ -363,8 +357,47 @@ messages for the same recovery event, one arriving from the subtree containing $
 from the subtree containing $v$.
 At this point $\mathrm{lca}(u,v)$ holds the weight of the heaviest edge in
 the cycle.
- 
 
+\subparagraph{Update Topology.}
+
+To update the topology, $\mathrm{lca}(u,v)$ sends a \msg{Replace}$\langle id,\, w(e), w \rangle$
+to the node that reported the maximum weight $w$ in the cycle:
+
+\begin{itemize}
+  \item If the node is not adjacent to the maximum-weight link, it simply forwards the message
+        to the next node of the cycle.
+  \item If a node that receives the message is adjacent to the link with
+        the maximum weight, it removes that link from the MST and will forward 
+        to the next node of the cycle the message:
+        \msg{Replace}$\langle id,\, w(e), \infty \rangle$
+  \item A node, that is not $u$ or $v$, that receives a \msg{Replace} message with $w = \infty$ 
+        forwards it to the next node in the cycle and then reverses the parent-child relation
+  \item When $u$ (resp. $v$) receives a \msg{Replace} message with $w = \infty$, adds the recovered link
+        $(u,v)$ (resp. $(v,u)$) to the MST.
+\end{itemize}
+
+% TODO: add diagram
+
+
+% TODO: deadlock briefly
+
+
+
+
+\paragraph{Different fragments.}
+If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
+there can be two different cases:
+\begin{itemize}
+  \item if $u$ (or $v$) is in sleep state, it means that the network was partitioned and
+        the link $(u,v)$ connects the two partitioned fragments. In this case, node $u$ 
+        (or $v$) sends a request to the root of its fragment to add the link $(u,v)$ to 
+        the MST.
+  \item Otherwise, a failure response protocol is already in progress. In this case the
+        failure needs to be resolved first: node $u$ and $v$ will wait for \msg{REIDEN}
+        message and check again if the they are in the same fragment, when they do the 
+        recovery response protocol will be started. If they are still in different fragments
+        eventually they will go in sleep state and the first case will be applied.
+\end{itemize}
 
 \section{Physical architecture and deployment}
 Which nodes and platforms involved, and where each component is deployed.
