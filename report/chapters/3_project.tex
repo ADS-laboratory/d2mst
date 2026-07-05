@@ -383,6 +383,8 @@ to the node that reported the maximum weight $w$ in the cycle:
 
 % TODO: add diagram
 
+The recovered link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
+the weight of the maximum-weight edge in the cycle.
 
 % TODO: deadlock briefly
 \subparagraph{Overlapping cycles serialization.}
@@ -392,6 +394,46 @@ Multiple concurrent recoveries within the same fragment may involve overlapping 
 Processing them independently may lead to inconsistencies: two LCAs may each remove the
 same edge, leaving a cycle in the MST.
 % TODO: figure similar to fig.1 in the old paper
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node/.style={circle, draw, minimum size=6mm, inner sep=0pt},
+    tree_edge/.style={ultra thick, draw=black},
+    recovered_edge/.style={thin, draw=black}
+]
+    % Define Nodes
+    \node[node] (top_l) at (-1.5, 4) {};
+    \node[node] (top_r) at (1.5, 4) {};
+    
+    \node[node] (mid_l) at (-2.5, 1.75) {};
+    \node[node] (mid_ct) at (0, 2.5) {};
+    \node[node] (mid_cb) at (0, 1) {};
+    \node[node] (mid_r) at (2.5, 1.75) {};
+    
+    \node[node] (bot_l) at (-1.5, -0.5) {};
+    \node[node] (bot_r) at (1.5, -0.5) {};
+
+    % Draw Tree Edges (Bold)
+    \draw[tree_edge] (top_l) -- (mid_l);
+    \draw[tree_edge] (top_l) -- (mid_ct);
+    \draw[tree_edge] (top_r) -- (mid_ct);
+    \draw[tree_edge] (top_r) -- (mid_r);
+    
+    \draw[tree_edge] (mid_l) -- (bot_l);
+    \draw[tree_edge] (mid_r) -- (bot_r);
+    \draw[tree_edge, red] (mid_ct) -- node[right, xshift=2mm] {$e_3$} (mid_cb); % maximum weight edge
+    
+    % Draw Special/Recovered Edges (Thin)
+    \draw[recovered_edge] (bot_l) -- node[below left] {$e_1$} (mid_cb);
+    \draw[recovered_edge] (bot_r) -- node[below right] {$e_2$} (mid_cb);
+
+\end{tikzpicture}
+\caption{Overlapping cycles formed by simultaneous link recoveries. If $e_3$ is the
+maximum-weight edge in the cycle formed by the recovery of $e_1$ and $e_2$, both LCAs may
+attempt to remove $e_3$, leaving a cycle in the MST.}
+\label{fig:overlapping_cycles}
+\end{figure}
 
 Naively, we could try to avoid this problem by making nodes that forwarded a
 \msg{Recovery} message wait until the LCA has completed the recovery before forwarding any
@@ -422,6 +464,14 @@ The root thus enforces a total order on concurrent recoveries, eliminating all d
 
 % TODO: argue about the fact that even with this procedure, recoveries with
 % non-overlapping cycles are processed concurrently
+
+\smallskip
+\noindent\emph{Complexity:}
+A single recovery costs $O(n)$ messages: the \msg{Recovery} messages travel only along
+tree links, and the \msg{Replace} phase traverses the cycle, which is also a subset of
+tree links.
+
+% TODO: argue correctness?
 
 \paragraph{Different fragments.}
 If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
