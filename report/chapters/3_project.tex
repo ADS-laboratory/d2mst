@@ -166,18 +166,18 @@ dominates the overall failure-response complexity.
 We propose an alternative approach to lower the complexity to $O(n\log n)$ in the average
 case.
 
-\noindent\textbf{TestOut: XOR-based crossing-edge existence detection.}
+\noindent\textbf{TestOut: XOR-based outgoing edge existence detection.}
 
-Property: a crossing edge is incident to exactly one node in the fragment, while an
+Property: an outgoing edge is incident to exactly one node in the fragment, while an
 internal edge is incident to two nodes in the fragment.
 
 The idea of the \textsc{TestOut} primitive is to exploit this property to determine
-whether any crossing edge exists in a given weight interval $[a,b]$ by computing the
+whether any outgoing edge exists in a given weight interval $[a,b]$ by computing the
 XOR of the identifiers of all edges in that interval:
 \begin{itemize}
 \item Internal edges are counted twice (once by each endpoint) and therefore cancel out in
 the XOR: $a \oplus a = 0$.
-\item Crossing edges are counted only once (by the endpoint in the fragment) and therefore
+\item Outgoing edges are counted only once (by the endpoint in the fragment) and therefore
 remain in the XOR. % TODO: argue about possible conflicts
 \end{itemize}
 
@@ -195,7 +195,7 @@ $
 X = \bigoplus_{v \in V(F)} x_v
 $
 
-If $X = 0$, no crossing edge exists in the interval; otherwise, at least one crossing edge
+If $X = 0$, no outgoing edge exists in the interval; otherwise, at least one outgoing edge
 exists.
 
 This procedure is just a broadcast (of the interval% and a random seed
@@ -207,9 +207,9 @@ This procedure is just a broadcast (of the interval% and a random seed
 
 \noindent\textbf{The binary search.}
 
-Now that we can test for the existence of crossing edges in a given weight interval, we
+Now that we can test for the existence of outgoing edges in a given weight interval, we
 can perform a binary search over the range of possible edge weights to find the
-minimum-weight crossing edge.
+minimum-weight outgoing edge.
 
 \begin{enumerate}
  
@@ -219,7 +219,7 @@ minimum-weight crossing edge.
 
     \item \textbf{Check existence.}
         Run \textsc{TestOut}$(F,\,1,\,W)$.
-        If the result is zero, no crossing edge exists, the root broadcasts
+        If the result is zero, no outgoing edge exists, the root broadcasts
         \msg{GoSleep} and all nodes enter the \emph{sleep} state.
         Otherwise continue.
  
@@ -251,7 +251,7 @@ minimum-weight crossing edge.
  
     \item \textbf{Test both halves.}
           Run \textsc{TestOut} on $[a,m]$ and $[m{+}1,b]$. The root narrows the search to
-          the \emph{lighter} sub-interval that contains at least one crossing edge:
+          the \emph{lighter} sub-interval that contains at least one outgoing edge:
           \[
               [a,b] \;\gets\;
               \begin{cases}
@@ -272,7 +272,7 @@ minimum-weight crossing edge.
           protocol), at most one node $p$ in $F$ holds an incident non-tree edge of
           weight~$w^*$.
           Node $p$ sends $\textsc{Test}\langle id \rangle$ over that edge; since the binary
-          search confirmed a crossing edge at weight $w^*$, the response is guaranteed
+          search confirmed an outgoing edge at weight $w^*$, the response is guaranteed
           to be \textsc{Accept}.
           Node $p$ thereby becomes the confirmed MOE holder and proceeds to Phase~4.
  
@@ -280,10 +280,10 @@ minimum-weight crossing edge.
 
 \smallskip
 \noindent\emph{Collisions:} The XOR test has no false positives: if $X \neq 0$ then at
-least one crossing edge exists in the interval. However, it may have false negatives if
-two or more crossing edges exist in the interval and their identifiers happen to cancel
+least one outgoing edge exists in the interval. However, it may have false negatives if
+two or more outgoing edges exist in the interval and their identifiers happen to cancel
 out in the XOR.
-For a non-empty set $S$ of crossing edges with independent m-bit hash values,
+For a non-empty set $S$ of outgoing edges with independent m-bit hash values,
 \[
   \Pr\!\left[\bigoplus_{e \in S} h_{\mathrm{xor}}(e) = 0\right]
   \;=\; 2^{-m}

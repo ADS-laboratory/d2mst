@@ -9,20 +9,15 @@ No specific interface is required: the system should be able to operate without 
 
 \section{Non functional requirements}
 
-The system must be fault tolerant, in particular it must have the property of eventual consistency: edge and node can fail or be temporarily unavailable, so the service must keep operating and converge to a correct state after a finite amount of time. The whole system should be transparent to the user: they should be unaware, or at least not be bothered by, the elimination or addition of edges during communications based on the MST.
+% Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
+% Are there execution time bounds? Minimum data rates?
+% If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services). 
 
-% TODO: CAP theorem
+
+The system must be fault tolerant and support eventual convergence: edges and nodes may fail or be temporarily unavailable, but the service must continue operating and recover a correct state after a finite amount of time. From the point of view of the CAP theorem, the system is designed to remain partition tolerant, since network partitions and temporary disconnections are inherent in the distributed setting. The implementation therefore prioritizes availability and convergence over immediate global consistency, while keeping the internal reconfiguration of the MST transparent to the user.
 
 
 % Cheng et al. : PA:
 % - eventual consistency: the system reaches a consistent state after a finite time
 % - availability (even if possibly not optimal)
 % - partition tolerance: non-negotiable since we want a dynamic mst
-
-% Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
-
-
-
-% Are there execution time bounds? Minimum data rates?
-
-% If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services).

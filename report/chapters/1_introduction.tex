@@ -1,14 +1,14 @@
 \chapter{Introduction}\label{ch:intro}
 
-In this chapter you describe the main problem, and an idea of the solution.
-It is not necessary to be very detailed or formal, but it is important to explain which are the main aims and issues from the point of view of Distributed Systems:
-\begin{itemize}
-\item A description of the application.
-\item The overall structure of the implementation: how resources are deployed, which are the players, the r\^oles.
-\item The distributed system features (and the transparencies) and algorithms you intend to implement.
-\item Your plan for testing the system.
-\item A schedule for how you plan to carry our your design and implementation
-\end{itemize}
+% In this chapter you describe the main problem, and an idea of the solution.
+% It is not necessary to be very detailed or formal, but it is important to explain which are the main aims and issues from the point of view of Distributed Systems:
+% \begin{itemize}
+% \item A description of the application.
+% \item The overall structure of the implementation: how resources are deployed, which are the players, the r\^oles.
+% \item The distributed system features (and the transparencies) and algorithms you intend to implement.
+% \item Your plan for testing the system.
+% \item A schedule for how you plan to carry our your design and implementation
+% \end{itemize}
 
 A Minimum Spanning Tree (MST) is a subset of the edges of a weighted, connected graph that connects all nodes with the smallest possible total cost. In a distributed setting, it provides an efficient communication backbone, reducing the cost of routing, broadcasting, or coordination while avoiding redundant links.
 
@@ -32,22 +32,26 @@ The standard procedure for maintaining the MST after an edge insertion leverages
 
 Handling edge deletions is more complex, and various approaches have been proposed to navigate the trade-off between message complexity and memory overhead. All of these approaches rely on the core principle underlying Kruskal's algorithm. Just as Kruskal's algorithm builds an MST by iteratively merging disjoint forest fragments using the globally minimum-weight available edge, an edge deletion essentially returns the network to an intermediate state of this process. The deletion partitions the MST into two disjoint fragments; to restore the tree, the algorithms must effectively resume Kruskal's greedy strategy by identifying and adding the absolute minimum-weight edge crossing the cut between these two components.
 
-Cheng, Cimet, and Kumar [2] proposed an updated variant of GHS that testes for crossing edges by checking each link. Their algorithm achieves $O(|E|)$ message complexity for link deletions. Furthermore, it avoids heavy spatial requirements, requiring each node to maintain only $O(\Delta \log N)$ bits of memory (where $\Delta$ is the node's degree).
+Cheng, Cimet, and Kumar [2] proposed an updated variant of GHS that testes for outgoing edges by checking each link. Their algorithm achieves $O(|E|)$ message complexity for link deletions. Furthermore, it avoids heavy spatial requirements, requiring each node to maintain only $O(\Delta \log N)$ bits of memory (where $\Delta$ is the node's degree).
 
-Beyond dedicated MST repair protocols, the problem can also be solved by adapting general dynamic topology maintenance algorithms. Approaches that continuously maintain the underlying topology of the network at each node (such as traditional link-state routing protocols) can be utilized to quickly find the minimum-weight crossing edge and add it to the MST with $O(N)$ message complexity. However, this inherently requires $O(|E| \log N)$ storage overhead in each node to maintain the global graph view. A more spatially optimized approach in this direction by Awerbuch, Cidon, and Kutten reduces this requirement, maintaining the $O(N)$ message complexity while requiring only $O(\Delta N \log N)$ storage per node.
+Beyond dedicated MST repair protocols, the problem can also be solved by adapting general dynamic topology maintenance algorithms. Approaches that continuously maintain the underlying topology of the network at each node (such as traditional link-state routing protocols) can be utilized to quickly find the minimum-weight outgoing edge and add it to the MST with $O(N)$ message complexity. However, this inherently requires $O(|E| \log N)$ storage overhead in each node to maintain the global graph view. A more spatially optimized approach in this direction by Awerbuch, Cidon, and Kutten reduces this requirement, maintaining the $O(N)$ message complexity while requiring only $O(\Delta N \log N)$ storage per node.
 
-An another approach by King, Kutten, and Thorup [4] introduced a mechanism for the repair of an MST without the need for additional local storage. Their algorithm demonstrates that tree repair can be accomplished with an $O(N \log N / \log \log N)$ communication complexity and only $O(\log N)$ local storage. To achieve this repair, they perform a distributed binary search over the set of crossing edge weights to efficiently locate the minimum-weight edge connecting the two fragmented MSTs. Our solution builds upon the binary search concept proposed by King, Kutten, and Thorup [4]. However, it utilizes a simplified architectural approach that requires fewer communication rounds per iteration, achieving a highly efficient but with message complexity of $O(N \log N)$.
+An another approach by King, Kutten, and Thorup [4] introduced a mechanism for the repair of an MST without the need for additional local storage. Their algorithm demonstrates that tree repair can be accomplished with an $O(N \log N / \log \log N)$ communication complexity and only $O(\log N)$ local storage. To achieve this repair, they perform a distributed binary search over the set of outgoing edge weights to efficiently locate the minimum-weight edge connecting the two fragmented MSTs. Our solution builds upon the binary search concept proposed by King, Kutten, and Thorup [4]. However, it utilizes a simplified architectural approach that requires fewer communication rounds per iteration, achieving a highly efficient but with message complexity of $O(N \log N)$.
 
 % TODO: Your plan for testing the system. A schedule for how you plan to carry out your design and implementation
 
-\subsection{TODO:}
-what we acctualy need to do: a system where each node ..
+\subsection{System Overview}
+The project is organized as a distributed system in which each node executes the same protocol and contributes locally to the maintenance of the spanning tree. Nodes do not have a global view of the network: they only store information about their incident links, their current fragment, and their role in the tree. The system relies on message exchanges among neighboring nodes to react to topology changes, update local state, and coordinate fragment merges when a better connection becomes available. In this way, the MST algorithm is not treated as a standalone procedure, but as the core coordination logic inside a distributed application.
 
-Testing: 
-- Simple edge insertions and deletion
-- Simple node failures and recoveries
-- random concurrent insertions and deletions
-- Full system simulation: Add and delete node/edges at radom times with different rates  
+The evaluation focuses on the system as a distributed platform. We will verify both functional correctness and runtime behavior under local and concurrent events, checking that the network remains stable and eventually converges after failures, recoveries, and topology updates.
+
+We will test the system through the following scenarios:
+\begin{itemize}
+\item isolated edge insertions and deletions,
+\item isolated node failures and recoveries,
+\item concurrent random insertions and deletions,
+\item long-running simulations with node and edge events occurring at different rates.
+\end{itemize}
 
 
 \section{Glossary}
@@ -57,6 +61,7 @@ Testing:
 \item \textbf{Link}: the communication channel between two neighboring nodes (network-level connection, often mapped to a graph adjacency).
 \item \textbf{Edge}: the graph abstraction of a link, usually with an associated weight/cost used by MST logic.
 \item \textbf{Fragment}: a partial tree built during the distributed MST algorithm; each fragment is a connected component (with respect to the tree) that will be merged with others.
-\item \textbf{Cross-edge}: an edge that connects two nodes belonging to different fragments.
+\item \textbf{Outgoing edge}: an edge that connects two nodes belonging to different fragments.
+\item \textbf{Minimum-weight outgoing edge (MOE)}: the outgoing edge with the smallest weight among all outgoing edges of a fragment.
 \item \textbf{Internal-edge}: an edge whose endpoints are in the same fragment.
 \end{itemize}
