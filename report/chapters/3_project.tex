@@ -10,11 +10,34 @@ This chapter is devoted to the description of the general architectures, and spe
 
 The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
 
-\subsection{Protocols and Algorithms}
-% Communication between components.  UML sequence diagrams go here.
-% Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
+
+We assume that initially the network has already converged to a minimum spanning tree (or
+a set of minimum spanning trees if the network is not connected). The system reacts to
+topological changes by executing a failure response protocol when a tree link fails, and a
+recovery response protocol when a previously failed link recovers.
+
+\subsubsection{Ids}
+
+These topological changes can fragment the MST into multiple disjoint fragments. To
+correctly execute the protocols described in the next sections, each node maintains a
+unique %\footnote{TODO: explain unique}
+\emph{fragment identity} that is updated whenever the fragment is split or merged.
+
+Intra-fragment messages carries the sender's current fragment identity. Upon receiving any
+of these messages, a node first checks whether the received identity matches its own
+current identity; if it does not, the message is \emph{silently discarded}.
+
+This check is the mechanism by which the protocol handles concurrent topological changes.
+When a new failure causes a fragment to adopt a fresh identity, all messages generated
+under the previous identity become instantly invalid: they will be rejected by every node
+they subsequently reach, without any explicit cancellation or coordination.
+
+In order for this mechanism to work, topological changes create new fragments with new
+identities that are guaranteed to be unique across the entire network.
 
 \begin{comment}
+Table~\ref{tab:messages} lists every message type exchanged during protocol execution.
+TODO: the following table will be inserted in the implementation chapter.
 \subsubsection{Messages}
 
 Table~\ref{tab:messages} lists every message type exchanged during protocol
@@ -102,7 +125,16 @@ guarantees.
 
 Both endpoints of the failed link are notified of the failure.
 
-Both endpoints generate a new unique fragment identity. %(we should choose where to explain this) (both nodes generate it?)
+Both endpoints generate a new unique fragment identity:
+
+\begin{itemize}
+    \item node $v$ generates the identity $(w(e), u, k(e))$;
+    \item node $u$ generates the identity $(w(e), v, k(e))$;
+\end{itemize}
+where $w(e)$ is the weight of the failed link, $u$ and $v$ are the identifiers of the
+endpoints, and $k(e)$ is a counter that is incremented each time the link fails and
+recovers. Without the counter, the same link could generate the same identity multiple
+times.
 
 Node $v$ (the child) immediately declares itself the root of its new fragment and enters
 the \emph{reiden} state.
