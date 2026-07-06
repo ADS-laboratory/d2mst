@@ -7,3 +7,59 @@
     primaryClass={cs.DC},
     url={https://arxiv.org/abs/1502.03320}, 
 }
+
+@article{Awerbuch2008Optimal,
+author = {Awerbuch, Baruch and Cidon, Israel and Kutten, Shay},
+title = {Optimal maintenance of a spanning tree},
+year = {2008},
+issue_date = {September 2008},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+volume = {55},
+number = {4},
+issn = {0004-5411},
+url = {https://doi.org/10.1145/1391289.1391292},
+doi = {10.1145/1391289.1391292},
+abstract = {In this article, we show that keeping track of history enables significant improvements in the communication complexity of dynamic network protocols. We present a communication optimal maintenance of a spanning tree in a dynamic network. The amortized (on the number of topological changes) message complexity is O(V), where V is the number of nodes in the network. The message size used by the algorithm is O(log |ID|) where |ID| is the size of the name space of the nodes. Typically, log |ID| = O(log V).Previous algorithms that adapt to dynamic networks involved Ω (E) messages per topological change—inherently paying for re-computation of the tree from scratch.Spanning trees are essential components in many distributed algorithms. Some examples include broadcast (dissemination of messages to all network nodes), multicast, reset (general adaptation of static algorithms to dynamic networks), routing, termination detection, and more. Thus, our efficient maintenance of a spanning tree implies the improvement of algorithms for these tasks. Our results are obtained using a novel technique to save communication. A node uses information received in the past in order to deduce present information from the fact that certain messages were NOT sent by the node's neighbor. This technique is one of our main contributions.},
+journal = {J. ACM},
+month = sep,
+articleno = {18},
+numpages = {45},
+keywords = {topological changes, spanning tree, optimal message complexity, leader election, dynamic networks, amortized complexity, Distributed algorithms}
+}
+
+@inproceedings{cheng1988protocolmaintainmst,
+author = {Cheng, C. and Cimet, I. and Kumar, S.},
+title = {A protocol to maintain a minimum spanning tree in a dynamic topology},
+year = {1988},
+isbn = {0897912799},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/52324.52357},
+doi = {10.1145/52324.52357},
+abstract = {We present a distributed protocol for updating and maintaining a minimum-weight spanning tree (MST) in a network with changing topology. The protocol can respond to multiple link/node failures and recoveries that can occur at arbitrary times. Given that an arbitrary finite number of topological changes occur during a period, the protocol finds the MST corresponding to the latest network, within finite time after the last change. The message complexity of the protocol is O(m|E|+k|V|) when k link recoveries and m link failures occur, where |V| and |E| are the total number of nodes and links, respectively.},
+booktitle = {Symposium Proceedings on Communications Architectures and Protocols},
+pages = {330–337},
+numpages = {8},
+location = {Stanford, California, USA},
+series = {SIGCOMM '88}
+}
+
+@article{GHS1983,
+author = {Gallager, R. G. and Humblet, P. A. and Spira, P. M.},
+title = {A Distributed Algorithm for Minimum-Weight Spanning Trees},
+year = {1983},
+issue_date = {Jan. 1983},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+volume = {5},
+number = {1},
+issn = {0164-0925},
+url = {https://doi.org/10.1145/357195.357200},
+doi = {10.1145/357195.357200},
+journal = {ACM Trans. Program. Lang. Syst.},
+month = jan,
+pages = {66–77},
+numpages = {12}
+}
+

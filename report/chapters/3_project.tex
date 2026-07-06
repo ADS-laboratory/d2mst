@@ -10,14 +10,11 @@ This chapter is devoted to the description of the general architectures, and spe
 
 The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
 
-\section{Logical architecture}
-Describe the components of your systems: modules/objects/components/services.
-For each component, describe the functionalities it implements, and by who is used.
-
 \subsection{Protocols and Algorithms}
 % Communication between components.  UML sequence diagrams go here.
 % Also, put here a detailed description of distributed algorithms used to solve specific problems of the project.
 
+\begin{comment}
 \subsubsection{Messages}
 
 Table~\ref{tab:messages} lists every message type exchanged during protocol
@@ -26,7 +23,6 @@ so that nodes can silently discard messages belonging to superseded protocol
 rounds — a crucial mechanism for correctness when failures and recoveries
 overlap in time.
 
-\begin{comment}
 \begin{table}[ht]
 \centering
 \renewcommand{\arraystretch}{1.35}
