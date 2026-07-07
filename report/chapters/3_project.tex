@@ -115,7 +115,13 @@ $e = (u, v)$ fails (with $u$ the parent of $v$ in the current MST), the spanning
 is split into two \emph{fragments} that must be reconnected by finding the new
 minimum-weight outgoing edge (MOE) between them.
 
-%TODO: figure showing the split and the two fragments.
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{imgs/failure.png}
+\caption{A link of the tree fails (in red). The network is split in two fragments( the circles). The minimum between the outgoing edges (in green) has to be found to reconnect the fragments and maintain the MST.}
+  
+\label{fig:failure}
+\end{figure}
 
 The response proceeds in four phases. Phases 1, 2, and 4 are shared between both protocol
 variants; Phase 3 admits two implementations with different complexity and correctness
