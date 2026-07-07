@@ -10,12 +10,24 @@ This chapter is devoted to the description of the general architectures, and spe
 
 The implementation is organized as a fully distributed system with one process per network node. Every process runs the same code base, but its behavior depends on the role it currently plays in the spanning tree and on the state of the network.
 
+\section{Protocols and Algorithms}
 
-We assume that initially the network has already converged to a minimum spanning tree (or
+We assume that initially the network has already converged to a minimum directed spanning tree (or
 a set of minimum spanning trees if the network is not connected). The system reacts to
 topological changes by executing a failure response protocol when a tree link fails, and a
-recovery response protocol when a previously failed link recovers.
+recovery response protocol when a previously failed link recovers. Here is an overview of how the protocols work:
 
+\begin{itemize}
+  \item \textbf{Failure response protocol:} when a tree link fails, the spanning tree is split into two fragments. The protocol identifies the minimum-weight edge that connects the two fragments and adds it to the MST, restoring connectivity. We provide two procedures to do so:
+  \begin{itemize}
+    \item a naive approach that tests all edges to check whether they are outgoing, with $O(e)$ message complexity;
+    \item a more efficient approach that performs a binary search over the range of edge weights, with $O(n\log n)$ message complexity. The root first estimates a median weight $m$ for the current interval $[a,b]$ and uses it to split the search space into $[a,m]$ and $[m{+}1,b]$. It then checks whether an outgoing edge exists in either interval by exploiting the fact that outgoing edges have only one node in the fragment while all other have two. The root keeps the smaller sub-interval that still contains at least one outgoing edge and repeats the process until only one weight remains. That final weight is
+    the minimum outgoing edge weight.
+  \end{itemize}
+  \item \textbf{Recovery responde protocol:} when a new link is added to the network, a cycle is created in the MST. The protocol identifies the maximum-weight edge in that cycle by propagating a message from both endpoints of the new link toward the root. The first node that receives both messages is the least common ancestor of the two endpoints and holds the maximum weight in the cycle. The least common ancestor then sends a message to properly update the topology inside the cycle, removing the maximum-weight edge and adding the new link to the MST.
+\end{itemize}
+
+In the next sections we describe the protocols in detail, including how multiple concurrent topological changes are handled.
 \subsubsection{Ids}
 
 These topological changes can fragment the MST into multiple disjoint fragments. To
