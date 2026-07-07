@@ -361,9 +361,9 @@ removed. The recovery response proceeds in three phases.
 
 \subparagraph{LCA.}
 If $u$ and $v$ share the same fragment identity, each sends a
-\msg{Recovery}$\langle id,\, w(e),\, w \rangle$ message toward the root of the fragment,
-where $w(e)$ is the weight of the recovered link and $w$ is the running maximum weight
-along the path traversed so far.
+\msg{Recovery}$\langle id,\, w(e)\, a,\, w \rangle$ message toward the root of the fragment,
+where $w(e)$ is the weight of the recovered link, $a$ is the id of the node and $w$ is the 
+running maximum weight along the path traversed so far.
 Each intermediate node $z$ forwards the message to its parent, updating the running
 maximum to $w' = \max\{w,\, w(\text{link to parent of } z)\}$.
 
@@ -381,8 +381,12 @@ the cycle.
 
 \subparagraph{Update Topology.}
 
-To update the topology, $\mathrm{lca}(u,v)$ sends a \msg{Replace}$\langle id,\, w(e), w \rangle$
-to the node that reported the maximum weight $w$ in the cycle:
+If the heaviest edge in the cycle is the same as the recovered link $e$, no further action is
+needed: the MST remains unchanged and the protocol terminates.
+
+If that is not the case, $\mathrm{lca}(u,v)$ sends a \msg{Replace}$\langle id,\, a, w \rangle$, 
+where $w$ is the weight of the maximum-weight edge in the cycle and $a$ is the id received with
+the message containing $w$, to the children that reported the maximum weight in the cycle:
 
 \begin{itemize}
   \item If the node is not adjacent to the maximum-weight link, it simply forwards the message
@@ -393,14 +397,21 @@ to the node that reported the maximum weight $w$ in the cycle:
         \msg{Replace}$\langle id,\, w(e), \infty \rangle$
   \item A node, that is not $u$ or $v$, that receives a \msg{Replace} message with $w = \infty$ 
         forwards it to the next node in the cycle and then reverses the parent-child relation
-  \item When $u$ (resp. $v$) receives a \msg{Replace} message with $w = \infty$, adds the recovered link
-        $(u,v)$ (resp. $(v,u)$) to the MST.
+  \item When $u$ (resp. $v$) receives a \msg{Replace} message with $a = u$(resp. $a = v$) and 
+        $w = \infty$, adds the recovered link $(u,v)$ (resp. $(v,u)$) to the MST.
 \end{itemize}
-
-% TODO: add diagram
 
 The recovered link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
 the weight of the maximum-weight edge in the cycle.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{imgs/recovery.png}
+\caption{Recovery response protocol: the two recovery messages travel up to the least common ancestor, and the replace phase then propagates the update along the cycle.}
+\label{fig:recovery}
+\end{figure}
+
+
 
 % TODO: leggere deadlock
 \subparagraph{Overlapping cycles serialization.}
@@ -409,7 +420,6 @@ Multiple concurrent recoveries within the same fragment may involve overlapping 
 
 Processing them independently may lead to inconsistencies: two LCAs may each remove the
 same edge, leaving a cycle in the MST.
-% TODO: figure similar to fig.1 in the old paper
 
 \begin{figure}[htbp]
 \centering
@@ -458,7 +468,6 @@ other \msg{Recovery} messages.
 However, this approach may lead to deadlocks: two LCAs may each wait for a message that
 has been blocked by the other's recovery process.
 
-% TODO: figure similar to fig.2 in the paper
 \begin{figure}[htbp]
 \centering
 \begin{tikzpicture}[
@@ -515,11 +524,11 @@ subsequent \msg{Recovery} messages are queued until the first recovery is comple
 So, when there aren't other recoveries in progress, the root pops the first \msg{Recovery}
 message from its queue and it responds with \msg{Privilege}$\langle id,\, w \rangle$,
 which travels down the same path and then around the cycle, releasing any blocked
-\msg{Recovery}$\langle id,\, w,\, _ \rangle$ messages it encounters. Note that only
+\msg{Recovery}$\langle id,\, w,\, _,\, _ \rangle$ messages it encounters. Note that only
 recovery message with $w$ weight (i.e. for the event selected by the root) are released,
 while other recovery messages remain blocked until their turn comes.
 
-A node holding a blocked \msg{Recovery}$\langle id,\, w,\, _ \rangle$ forwards it upon
+A node holding a blocked \msg{Recovery}$\langle id,\, w,\, _,\, _ \rangle$ forwards it upon
 receiving \msg{Privilege}$\langle id,\, w \rangle$, allowing the LCA to eventually collect
 both halves of the recovery.
 
