@@ -31,8 +31,7 @@ In the next sections we describe the protocols in detail, including how multiple
 \subsubsection{Ids}
 
 These topological changes can fragment the MST into multiple disjoint fragments. To
-correctly execute the protocols described in the next sections, each node maintains a
-unique %\footnote{TODO: explain unique}
+correctly execute the \emph{response} protocols, each node maintains a unique
 \emph{fragment identity} that is updated whenever the fragment is split or merged.
 
 Intra-fragment messages carries the sender's current fragment identity. Upon receiving any
@@ -116,9 +115,6 @@ overlap in time.
 \label{tab:messages}
 \end{table}
 \end{comment}
-
-% TODO: explain that every messages carries the sender's current fragment identity so that
-% nodes can discard messages belonging to superseded protocol rounds
 
 \subsubsection{Failure response protocol}
 
