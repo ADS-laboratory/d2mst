@@ -15,7 +15,7 @@ The implementation is organized as a fully distributed system with one process p
 We assume that initially the network has already converged to a minimum directed spanning tree (or
 a set of minimum spanning trees if the network is not connected). The system reacts to
 topological changes by executing a failure response protocol when a tree link fails, and a
-recovery response protocol when a previously failed link recovers. Here is an overview of how the protocols work:
+addition response protocol when a new link is added to the network. Here is an overview of how the protocols work:
 
 \begin{itemize}
   \item \textbf{Failure response protocol:} when a tree link fails, the spanning tree is split into two fragments. The protocol identifies the minimum-weight edge that connects the two fragments and adds it to the MST, restoring connectivity. We provide two procedures to do so:
@@ -24,7 +24,7 @@ recovery response protocol when a previously failed link recovers. Here is an ov
     \item a more efficient approach that performs a binary search over the range of edge weights, with $O(n\log n)$ message complexity. The root first estimates a median weight $m$ for the current interval $[a,b]$ and uses it to split the search space into $[a,m]$ and $[m{+}1,b]$. It then checks whether an outgoing edge exists in either interval by exploiting the fact that outgoing edges have only one node in the fragment while all other have two. The root keeps the smaller sub-interval that still contains at least one outgoing edge and repeats the process until only one weight remains. That final weight is
     the minimum outgoing edge weight.
   \end{itemize}
-  \item \textbf{Recovery responde protocol:} when a new link is added to the network, a cycle is created in the MST. The protocol identifies the maximum-weight edge in that cycle by propagating a message from both endpoints of the new link toward the root. The first node that receives both messages is the least common ancestor of the two endpoints and holds the maximum weight in the cycle. The least common ancestor then sends a message to properly update the topology inside the cycle, removing the maximum-weight edge and adding the new link to the MST.
+  \item \textbf{Addition response protocol:} when a new link is added to the network, a cycle is created in the MST. The protocol identifies the maximum-weight edge in that cycle by propagating a message from both endpoints of the new link toward the root. The first node that receives both messages is the least common ancestor of the two endpoints and holds the maximum weight in the cycle. The least common ancestor then sends a message to properly update the topology inside the cycle, removing the maximum-weight edge and adding the new link to the MST.
 \end{itemize}
 
 In the next sections we describe the protocols in detail, including how multiple concurrent topological changes are handled.
@@ -55,7 +55,7 @@ TODO: the following table will be inserted in the implementation chapter.
 Table~\ref{tab:messages} lists every message type exchanged during protocol
 execution. Every message carries the sender's current \emph{fragment identity}
 so that nodes can silently discard messages belonging to superseded protocol
-rounds — a crucial mechanism for correctness when failures and recoveries
+rounds — a crucial mechanism for correctness when failures and additions
 overlap in time.
 
 \begin{table}[ht]
@@ -151,7 +151,7 @@ Both endpoints generate a new unique fragment identity:
 \end{itemize}
 where $w(e)$ is the weight of the failed link, $u$ and $v$ are the identifiers of the
 endpoints, and $k(e)$ is a counter that is incremented each time the link fails and
-recovers. Without the counter, the same link could generate the same identity multiple
+is added. Without the counter, the same link could generate the same identity multiple
 times.
 
 Node $v$ (the child) immediately declares itself the root of its new fragment and enters
@@ -350,12 +350,12 @@ for the next phase of tree construction.
 
 If a concurrent topological changes have occurred while this process was in progress, the
 fragment identity mechanism handles them correctly: any messages carrying a superseded
-identity are silently discarded, and the most recent failure or recovery initiates a new
+identity are silently discarded, and the most recent failure or addition initiates a new
 protocol round with a fresh identity. % da qualche parte dobbiamo dire che potrebbero esserci versioni diverse del MST in giro per la rete allo stesso tempo (se un nodo non ha ancora ricevuto il broadcast con il nuovo id)
 
-\subsubsection{Recovery response protocol}
+\subsubsection{Addition response protocol}
  
-When a previously failed link $e = (u,v)$ recovers, two cases arise depending on whether
+When a link $e = (u,v)$ is added to the network, two cases arise depending on whether
 its endpoints belong to the same fragment or to different fragments.
 
 To check whether $u$ and $v$ are in the same fragment, each endpoint sends a
@@ -364,42 +364,42 @@ fragment identity.
  
 \paragraph{Same fragment.}
 If $u$ and $v$ are in the same fragment (i.e., they have the same fragment identity), the
-recovered link $e$ introduces a cycle with the existing tree edges.
+new link $e$ introduces a cycle with the existing tree edges.
 
 To preserve the MST property, the maximum-weight edge in that cycle must be identified and
-removed. The recovery response proceeds in three phases.
+removed. The addition response proceeds in three phases.
 
-% TODO: Failure during recovery:
-% - If u is a lca of a recovery event during a deletion: u will hold the REPLACE message until
+% TODO: Failure during addition:
+% - If u is a lca of an addition event during a deletion: u will hold the REPLACE message until
 %   the failure is resolved. - FATTO
-% - A link in the cycle fails during the recovery: the messages will be discarded because they
+% - A link in the cycle fails during an addtion: the messages will be discarded because they
 %   contain the old fragment identity. - NON SERVE? (capitolo 4.3)
 
-% TODO: When changing the graph because of a recovery we need to hold messages - NON SERVE? (capitolo 4.3)
+% TODO: When changing the graph because of an addition we need to hold messages - NON SERVE? (capitolo 4.3)
 
 \subparagraph{LCA.}
 If $u$ and $v$ share the same fragment identity, each sends a
-\msg{Recovery}$\langle id,\, w(e)\, a,\, w \rangle$ message toward the root of the fragment,
-where $w(e)$ is the weight of the recovered link, $a$ is the id of the node and $w$ is the 
+\msg{Addition}$\langle id,\, w(e)\, a,\, w \rangle$ message toward the root of the fragment,
+where $w(e)$ is the weight of the new link, $a$ is the id of the node and $w$ is the 
 running maximum weight along the path traversed so far.
 Each intermediate node $z$ forwards the message to its parent, updating the running
 maximum to $w' = \max\{w,\, w(\text{link to parent of } z)\}$.
 
 The two messages propagate upward until they converge at the \emph{least
-common ancestor} $\mathrm{lca}(u,v)$: the first node that receives two \msg{Recovery}
-messages for the same recovery event, one arriving from the subtree containing $u$ and one
+common ancestor} $\mathrm{lca}(u,v)$: the first node that receives two \msg{Addition}
+messages for the same addition event, one arriving from the subtree containing $u$ and one
 from the subtree containing $v$.
 
-The first \msg{Recovery} message to arrive at $\mathrm{lca}(u,v)$ will travel to the root,
+The first \msg{Addition} message to arrive at $\mathrm{lca}(u,v)$ will travel to the root,
 while the second is blocked to avoid parents of $\mathrm{lca}(u,v)$ mistakenly receiving
-two \msg{Recovery} messages and incorrectly concluding that they are the LCA.
+two \msg{Addition} messages and incorrectly concluding that they are the LCA.
 
 At this point $\mathrm{lca}(u,v)$ holds the weight of the heaviest edge in
 the cycle.
 
 \subparagraph{Update Topology.}
 
-If the heaviest edge in the cycle is the same as the recovered link $e$, no further action is
+If the heaviest edge in the cycle is the same as the new link $e$, no further action is
 needed: the MST remains unchanged and the protocol terminates.
 
 If that is not the case, $\mathrm{lca}(u,v)$ sends a \msg{Replace}$\langle id,\, a, w \rangle$, 
@@ -416,17 +416,17 @@ the message containing $w$, to the children that reported the maximum weight in 
   \item A node, that is not $u$ or $v$, that receives a \msg{Replace} message with $w = \infty$ 
         forwards it to the next node in the cycle and then reverses the parent-child relation
   \item When $u$ (resp. $v$) receives a \msg{Replace} message with $a = u$(resp. $a = v$) and 
-        $w = \infty$, adds the recovered link $(u,v)$ (resp. $(v,u)$) to the MST.
+        $w = \infty$, adds the new link $(u,v)$ (resp. $(v,u)$) to the MST.
 \end{itemize}
 
-The recovered link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
+      The new link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
 the weight of the maximum-weight edge in the cycle.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=\linewidth]{imgs/recovery.png}
-\caption{Recovery response protocol: the two recovery messages travel up to the least common ancestor, and the replace phase then propagates the update along the cycle.}
-\label{fig:recovery}
+\caption{Addition response protocol: the two addition messages travel up to the least common ancestor, and the replace phase then propagates the update along the cycle.}
+\label{fig:addition}
 \end{figure}
 
 
@@ -434,7 +434,7 @@ the weight of the maximum-weight edge in the cycle.
 % TODO: leggere deadlock
 \subparagraph{Overlapping cycles serialization.}
 
-Multiple concurrent recoveries within the same fragment may involve overlapping cycles.
+Multiple concurrent additions within the same fragment may involve overlapping cycles.
 
 Processing them independently may lead to inconsistencies: two LCAs may each remove the
 same edge, leaving a cycle in the MST.
@@ -468,23 +468,23 @@ same edge, leaving a cycle in the MST.
     \draw[tree_edge] (mid_r) -- (bot_r);
     \draw[tree_edge, red] (mid_ct) -- node[right, xshift=2mm] {$e_3$} (mid_cb); % maximum weight edge
     
-    % Draw Special/Recovered Edges (Thin)
+    % Draw Special/Added Edges (Thin)
     \draw[recovered_edge] (bot_l) -- node[below left] {$e_1$} (mid_cb);
     \draw[recovered_edge] (bot_r) -- node[below right] {$e_2$} (mid_cb);
 
 \end{tikzpicture}
-\caption{Overlapping cycles formed by simultaneous link recoveries. If $e_3$ is the
-maximum-weight edge in the cycle formed by the recovery of $e_1$ and $e_2$, both LCAs may
+\caption{Overlapping cycles formed by simultaneous link additions. If $e_3$ is the
+maximum-weight edge in the cycle formed by the addition of $e_1$ and $e_2$, both LCAs may
 attempt to remove $e_3$, leaving a cycle in the MST.}
 \label{fig:overlapping_cycles}
 \end{figure}
 
-Naively, we could try to avoid this problem by making nodes that forwarded a
-\msg{Recovery} message wait until the LCA has completed the recovery before forwarding any
-other \msg{Recovery} messages.
+Naively, we could try to avoid this problem by making nodes that forwarded an
+\msg{Addition} message wait until the LCA has completed the addition before forwarding any
+other \msg{Addition} messages.
 
 However, this approach may lead to deadlocks: two LCAs may each wait for a message that
-has been blocked by the other's recovery process.
+has been blocked by the other's addition process.
 
 \begin{figure}[htbp]
 \centering
@@ -534,30 +534,30 @@ has been blocked by the other's recovery process.
 \label{fig:lca_serialization}
 \end{figure}
  
-To avoid this, the root serializes recoveries using a token. The serialization order is
-determined by the order in which the root receives \msg{Recovery} messages from its
-children. The first \msg{Recovery} message to arrive is processed immediately, while any
-subsequent \msg{Recovery} messages are queued until the first recovery is complete.
+To avoid this, the root serializes additions using a token. The serialization order is
+determined by the order in which the root receives \msg{Addition} messages from its
+children. The first \msg{Addition} message to arrive is processed immediately, while any
+subsequent \msg{Addition} messages are queued until the first addition is complete.
 
-So, when there aren't other recoveries in progress, the root pops the first \msg{Recovery}
+So, when there aren't other additions in progress, the root pops the first \msg{Addition}
 message from its queue and it responds with \msg{Privilege}$\langle id,\, w \rangle$,
 which travels down the same path and then around the cycle, releasing any blocked
-\msg{Recovery}$\langle id,\, w,\, _,\, _ \rangle$ messages it encounters. Note that only
-recovery message with $w$ weight (i.e. for the event selected by the root) are released,
-while other recovery messages remain blocked until their turn comes.
+\msg{Addition}$\langle id,\, w,\, _,\, _ \rangle$ messages it encounters. Note that only
+addition messages with $w$ weight (i.e. for the event selected by the root) are released,
+while other addition messages remain blocked until their turn comes.
 
-A node holding a blocked \msg{Recovery}$\langle id,\, w,\, _,\, _ \rangle$ forwards it upon
+A node holding a blocked \msg{Addition}$\langle id,\, w,\, _,\, _ \rangle$ forwards it upon
 receiving \msg{Privilege}$\langle id,\, w \rangle$, allowing the LCA to eventually collect
-both halves of the recovery.
+both halves of the addition.
 
-The root thus enforces a total order on concurrent recoveries, eliminating all deadlocks.
+The root thus enforces a total order on concurrent additions, eliminating all deadlocks.
 
-% TODO: argue about the fact that even with this procedure, recoveries with
+% TODO: argue about the fact that even with this procedure, additions with
 % non-overlapping cycles are processed concurrently
 
 \smallskip
 \noindent\emph{Complexity:}
-A single recovery costs $O(n)$ messages: the \msg{Recovery} messages travel only along
+A single addition costs $O(n)$ messages: the \msg{Addition} messages travel only along
 tree links, and the \msg{Replace} phase traverses the cycle, which is also a subset of
 tree links.
 
@@ -573,8 +573,8 @@ there can be two different cases:
         the MST.
   \item Otherwise, a failure response protocol is already in progress. In this case the
         failure needs to be resolved first: node $u$ and $v$ will wait for \msg{REIDEN}
-        message and check again if the they are in the same fragment, when they do the 
-        recovery response protocol will be started. If they are still in different fragments
+      message and check again if the they are in the same fragment, when they do the 
+      addition response protocol will be started. If they are still in different fragments
         eventually they will go in sleep state and the first case will be applied.
 \end{itemize}
 
@@ -588,7 +588,7 @@ Tier 1 GHS
 
 Tier 2 Our algorithm:
 - with the O(|E|) phase 3 (naive)
-- with no concurrent failures/recoveries
+- with no concurrent failures/additions
 
 Tier 3 final with all features.
 
