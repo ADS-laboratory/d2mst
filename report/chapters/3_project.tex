@@ -578,16 +578,33 @@ there can be two different cases:
 Which nodes and platforms involved, and where each component is deployed.
 
 \section{Development plan}
-Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system leve
+% Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system leve
 
-Tier 1 GHS
+The implementation will be organized in cumulative tiers, starting from a minimal
+baseline and progressively adding the dynamic behavior described in the previous
+sections. 
 
-Tier 2 Our algorithm:
-- with the O(|E|) phase 3 (naive)
-- with no concurrent failures/additions
+\paragraph{Tier 1: GHS baseline.}
+The first milestone is a static distributed MST implementation based on the
+Gallager Humblet Spira algorithm. This version establishes the basic distributed
+infrastructure, including message passing, fragment management, and root election, but
+assumes that the network topology remains stable after the initial construction.
 
-Tier 3 final with all features.
+\paragraph{Tier 2: Dynamic repair with the naive deletion phase.}
+The second milestone extends the baseline with our dynamic repair algorithm for
+link failures, using the $O(|E|)$ naive Phase~3 described in this chapter. At this stage
+the system handles one topological event at a time and does not yet support concurrent
+failures or additions. This tier is intended to validate the correctness of the failure
+response protocol and the fragment reidentification mechanism.
 
-Tier 4 additional features:
-- other median calculation methods, e.g., using a distributed selection algorithm.
-- ...
+\paragraph{Tier 3: Full dynamic algorithm.}
+The third milestone adds the complete behavior of the system: the binary-search-based
+minimum outgoing edge search, addition handling, and the mechanisms needed to cope with
+concurrent failures and additions. At the end of this stage, the implementation should
+match the full protocol described in the project chapter.
+
+\paragraph{Tier 4: Additional improvements.}
+If time permits, the final tier will explore optional enhancements that are not required
+for the core project. Possible extensions include alternative methods for estimating the
+median during Phase~3, such as a distributed selection algorithm, and further
+optimizations.
