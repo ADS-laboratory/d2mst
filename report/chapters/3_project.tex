@@ -207,6 +207,7 @@ dominates the overall failure-response complexity.
 
 We propose an alternative approach to lower the complexity to $O(n\log n)$ in the average
 case.
+\smallskip
 
 \noindent\textbf{TestOut: XOR-based outgoing edge existence detection.}
 
@@ -224,24 +225,23 @@ remain in the XOR. % TODO: argue about possible conflicts
 \end{itemize}
 
 In particular, each edge $e = (u,v)$ is assigned a symmetric unique identifier
-$\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$.
-
-Each node computes the XOR of the identifiers of its incident edges whose weights fall in
-$[a,b]$:
-$
+$\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$. Each node computes the XOR of the identifiers of its incident edges whose weights fall in $[a,b]$:
+$$
 x_v = \bigoplus_{e \in \delta(v) \cap [a,b]} \mathrm{id}(e)
-$
+$$
 
 The root collects the $x_v$ values from all nodes in the fragment and aggregates:
-$
+$$
 X = \bigoplus_{v \in V(F)} x_v
-$
+$$
 
 If $X = 0$, no outgoing edge exists in the interval; otherwise, at least one outgoing edge
 exists.
 
 This procedure is just a broadcast (of the interval) followed by an echo (of the local XOR
 values), and therefore costs $O(n)$ messages.
+
+\medskip
 
 \noindent\textbf{The binary search.}
 
@@ -297,10 +297,7 @@ minimum-weight outgoing edge.
           \]
  
     \item \textbf{Iterate.}
-          Because $m$ splits $[a,b]$ near its median, the interval length halves on
-          average at each step.
-          After $O(\log W)$ iterations the interval collapses to a single weight value
-          $a = b = w^*$, uniquely identifying the MOE weight.
+          For the new interval $[a,b]$, we iterate the algorithm by computing the new median and splitting the interval again. Because the interval strictly shrinks at each step, it eventually collapses to a single weight value $a = b = w^*$, which uniquely identifies the MOE weight.
  
     \item \textbf{Identify the edge.}
           When $a = b = w^*$, the root broadcasts $w^*$.
@@ -348,6 +345,11 @@ If a concurrent topological changes have occurred while this process was in prog
 fragment identity mechanism handles them correctly: any messages carrying a superseded
 identity are silently discarded, and the most recent failure or addition initiates a new
 protocol round with a fresh identity. % da qualche parte dobbiamo dire che potrebbero esserci versioni diverse del MST in giro per la rete allo stesso tempo (se un nodo non ha ancora ricevuto il broadcast con il nuovo id)
+
+\paragraph{Complexity.}
+We already argued that the protocol to find the approximate median has $O(n)$ message complexity. The same argument can be applied to the \textsc{TestOut} primitive, which is also a broadcast followed by an echo. In the average case, the binary search over the edges requires $O(\log n)$ iterations to converge to a single weight value. Therefore, the overall message complexity of the binary search approach is $O(n \log n)$ in the average case. Each message carries a constant number of identifiers and weights, so the message size is $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
+%TODO: say something on the memory used by each node
+
 
 \subsubsection{Addition response protocol}
  
@@ -551,12 +553,6 @@ The root thus enforces a total order on concurrent additions, eliminating all de
 % TODO: argue about the fact that even with this procedure, additions with
 % non-overlapping cycles are processed concurrently
 
-\smallskip
-\noindent\emph{Complexity:}
-A single addition costs $O(n)$ messages: the \msg{Addition} messages travel only along
-tree links, and the \msg{Replace} phase traverses the cycle, which is also a subset of
-tree links.
-
 % TODO: argue correctness?
 
 \paragraph{Different fragments.}
@@ -573,6 +569,11 @@ there can be two different cases:
       addition response protocol will be started. If they are still in different fragments
         eventually they will go in sleep state and the first case will be applied.
 \end{itemize}
+
+\paragraph{Complexity.}
+A single addition costs $O(n)$ messages: the \msg{Addition} messages travel only in one direction along
+tree links, and the \msg{Replace} phase traverses the cycle, which is also a subset of
+tree links. The message size is $O(\log ID + \log W)$ bits, where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
 
 \section{Physical architecture and deployment}
 Which nodes and platforms involved, and where each component is deployed.
