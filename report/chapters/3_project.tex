@@ -28,7 +28,7 @@ addition response protocol when a new link is added to the network. Here is an o
 \end{itemize}
 
 In the next sections we describe the protocols in detail, including how multiple concurrent topological changes are handled.
-\subsubsection{Ids}
+\subsubsection{Fragment identity}
 
 These topological changes can fragment the MST into multiple disjoint fragments. To
 correctly execute the \emph{response} protocols, each node maintains a unique
@@ -221,7 +221,7 @@ XOR of the identifiers of all edges in that interval:
 \item Internal edges are counted twice (once by each endpoint) and therefore cancel out in
 the XOR: $a \oplus a = 0$.
 \item Outgoing edges are counted only once (by the endpoint in the fragment) and therefore
-remain in the XOR. % TODO: argue about possible conflicts
+remain in the XOR.
 \end{itemize}
 
 In particular, each edge $e = (u,v)$ is assigned a symmetric unique identifier
@@ -271,7 +271,10 @@ minimum-weight outgoing edge.
             H\!\left(s_{\mathrm{sk}} \;\|\; \mathrm{id}(e)\right),
         \]
         Each node retains only the $k$ edges with the \emph{smallest} priority values,
-        discarding all others.
+        discarding all others. Because the hash function $H$ acts as a random oracle,
+        keeping the $k$ edges with the smallest priority values is equivalent to drawing a
+        uniform random sample of size $k$ without replacement from the $N$ edges currently
+        in $[a,b]$. 
 
         During the convergecast, each internal node merges its own set of edges with those
         received from its children, deduplicates by edge identifier, and forwards the $k$
@@ -279,11 +282,17 @@ minimum-weight outgoing edge.
         The root collects approximately $k$ uniformly random non-tree edges from across
         the fragment; the \textbf{median of their weights} is used as the split point~$m$.
 
-        The parameter $k$ is a configurable constant that controls the quality of the
-        median estimate: larger $k$ yields a more balanced split but increases per-round
-        message size.
+        By Hoeffding's inequality\footnote{While Hoeffding's inequality formally bounds
+        the mean of random variables, we apply it here to the indicator variables
+        representing whether a sampled edge falls below a given population quantile. This
+        bounds the probability of the sample median deviating from the true median.}, the
+        probability that the sample median falls outside the $[1/4, 3/4]$ quantile range
+        of the true edge weights is bounded by $2\exp(-k/8)$.
 
-        % TODO: How good is the approximation?
+        Thus, for a sufficiently large constant $k$, the chosen split point $m$ shrinks
+        the search space by a constant fraction with high constant probability. Over the
+        course of the algorithm, this guarantees that the interval shrinks to a single
+        edge in $\mathcal{O}(\log N)$ rounds in expectation.
  
     \item \textbf{Test both halves.}
           Run \textsc{TestOut} on $[a,m]$ and $[m{+}1,b]$. The root narrows the search to
@@ -478,8 +487,8 @@ attempt to remove $e_3$, leaving a cycle in the MST.}
 \end{figure}
 
 Naively, we could try to avoid this problem by making nodes that forwarded an
-\msg{Addition} message wait until the LCA has completed the addition before forwarding any
-other \msg{Addition} messages.
+\msg{Addition} message wait until the LCA has completed the response protocol before
+forwarding any other \msg{Addition} message.
 
 However, this approach may lead to deadlocks: two LCAs may each wait for a message that
 has been blocked by the other's addition process.
