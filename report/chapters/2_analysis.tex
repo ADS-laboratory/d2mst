@@ -6,6 +6,9 @@ In this chapter, we describe in detail functional and non-functional requirement
 % Which functions must be offered to users / other programs?  Which are the input data and the output data? Which is the expected effect?
 No specific interface is required: the system should be able to operate without any external interface. In order to conduct tests and evaluate the system, a minimal service for performing link and node operations is provided, as well as a monitoring service for observing the system's state.
 
+% I nodi sarebbero gli users? In quel caso le "funzioni" offerte agli users sarebbero:
+% - il parent
+% - i figli
 
 \section{Non functional requirements}
 
@@ -14,7 +17,7 @@ No specific interface is required: the system should be able to operate without 
 % If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services). 
 
 
-The system must be fault tolerant and support eventual convergence: edges and nodes may fail or be temporarily unavailable, but the service must continue operating and recover a correct state after a finite amount of time. From the point of view of the CAP theorem, the system is designed to remain partition tolerant, since network partitions and temporary disconnections are inherent in the distributed setting. The implementation therefore prioritizes availability and convergence over immediate global consistency, while keeping the internal reconfiguration of the MST transparent to the user.
+The system must be fault tolerant and support eventual convergence: edges and nodes may fail or be temporarily unavailable, but the service must continue operating and recover a correct state after a finite amount of time. From the point of view of the CAP theorem, the system is designed to be partition tolerant, since network partitions and temporary disconnections are an intrinsic property of the problem. The implementation therefore prioritizes availability and convergence over immediate global consistency, while keeping the internal reconfiguration of the MST transparent to the user.
 
 
 % Cheng et al. : PA:

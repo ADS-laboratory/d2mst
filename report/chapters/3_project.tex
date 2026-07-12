@@ -20,35 +20,36 @@ addition response protocol when a new link is added to the network. Here is an o
 \begin{itemize}
   \item \textbf{Failure response protocol:} when a tree link fails, the spanning tree is split into two fragments. The protocol identifies the minimum-weight edge that connects the two fragments and adds it to the MST, restoring connectivity. We provide two procedures to do so:
   \begin{itemize}
-    \item a naive approach that tests all edges to check whether they are outgoing, with $O(e)$ message complexity;
-    \item a more efficient approach that performs a binary search over the range of edge weights, with $O(n\log n)$ message complexity. The root first estimates a median weight $m$ for the current interval $[a,b]$ and uses it to split the search space into $[a,m]$ and $[m{+}1,b]$. It then checks whether an outgoing edge exists in either interval by exploiting the fact that outgoing edges have only one node in the fragment while all other have two. The root keeps the smaller sub-interval that still contains at least one outgoing edge and repeats the process until only one weight remains. That final weight is
+    \item a naive approach that tests all edges to check whether they are outgoing, with $O(|E|)$ message complexity;
+    \item a more efficient approach that performs a binary search over the range of edge weights, with $O(N\log N)$ message complexity. The root first estimates a median weight $m$ for the current interval $[a,b]$ and uses it to split the search space into $[a,m]$ and $(m,b]$. It then checks whether an outgoing edge exists in either interval by exploiting the fact that outgoing edges have only one node in the fragment while all other have two. The root keeps the smaller sub-interval that still contains at least one outgoing edge and repeats the process until only one weight remains. That final weight is
     the minimum outgoing edge weight.
   \end{itemize}
   \item \textbf{Addition response protocol:} when a new link is added to the network, a cycle is created in the MST. The protocol identifies the maximum-weight edge in that cycle by propagating a message from both endpoints of the new link toward the root. The first node that receives both messages is the least common ancestor of the two endpoints and holds the maximum weight in the cycle. The least common ancestor then sends a message to properly update the topology inside the cycle, removing the maximum-weight edge and adding the new link to the MST.
 \end{itemize}
 
 In the next sections we describe the protocols in detail, including how multiple concurrent topological changes are handled.
+
 \subsubsection{Fragment identity}
 
 These topological changes can fragment the MST into multiple disjoint fragments. To
 correctly execute the \emph{response} protocols, each node maintains a unique
 \emph{fragment identity} that is updated whenever the fragment is split or merged.
 
-Intra-fragment messages carries the sender's current fragment identity. Upon receiving any
+Intra-fragment messages carry the sender's current fragment identity. Upon receiving any
 of these messages, a node first checks whether the received identity matches its own
 current identity; if it does not, the message is \emph{silently discarded}.
 
 This check is the mechanism by which the protocol handles concurrent topological changes.
 When a new failure causes a fragment to adopt a fresh identity, all messages generated
 under the previous identity become instantly invalid: they will be rejected by every node
-they subsequently reach, without any explicit cancellation or coordination.
+they subsequently reach, without any explicit cancellation.
 
 In order for this mechanism to work, topological changes create new fragments with new
-identities that are guaranteed to be unique across the entire network.
+identities that are guaranteed to be unique across the entire network. % TODO: viene detto dopo?
 
 \begin{comment}
 Table~\ref{tab:messages} lists every message type exchanged during protocol execution.
-TODO: the following table will be inserted in the implementation chapter.
+the following table will be inserted in the implementation chapter.
 \subsubsection{Messages}
 
 Table~\ref{tab:messages} lists every message type exchanged during protocol
@@ -126,24 +127,24 @@ minimum-weight outgoing edge (MOE) between them.
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=\linewidth]{imgs/failure.png}
-\caption{A link of the tree fails (in red). The network is split in two fragments( the circles). The minimum between the outgoing edges (in green) has to be found to reconnect the fragments and maintain the MST.}
+\caption{A link of the tree fails (in red). The network is split in two fragments (the circles). The minimum between the outgoing edges (in green) has to be found to reconnect the fragments and maintain the MST.}
   
 \label{fig:failure}
 \end{figure}
 
 The response proceeds in four phases. Phases 1, 2, and 4 are shared between both protocol
-variants; Phase 3 admits two implementations with different complexity and correctness
+variants; phase 3 admits two implementations with different complexity and correctness
 guarantees.
 
-\paragraph{Detection and split.}
+\paragraph{Phase 1. Detection and split.}
 
 Both endpoints of the failed link are notified of the failure.
 
 Both endpoints generate a new unique fragment identity:
 
 \begin{itemize}
-    \item node $v$ generates the identity $(w(e), u, k(e))$;
-    \item node $u$ generates the identity $(w(e), v, k(e))$;
+    \item node $u$ generates the identity $(w(e), u, k(e))$;
+    \item node $v$ generates the identity $(w(e), v, k(e))$;
 \end{itemize}
 where $w(e)$ is the weight of the failed link, $u$ and $v$ are the identifiers of the
 endpoints, and $k(e)$ is a counter that is incremented each time the link fails and
@@ -151,15 +152,16 @@ is added. Without the counter, the same link could generate the same identity mu
 times.
 
 Node $v$ (the child) immediately declares itself the root of its new fragment and enters
-the \emph{reiden} state.
+phase 2 (\emph{reiden} state).
 
 Node $u$ (the parent) propagates the information of the failure upward toward the root
-$r$ of its fragment. Upon receiving this notification, $r$ enters the \emph{reiden} state.
+$r$ of its fragment. Upon receiving this notification, $r$ enters phase 2 (\emph{reiden}
+state).
 
-\paragraph{RE-IDENtification.}
+\paragraph{Phase 2. RE-IDENtification.}
 
-The root broadcasts the change down the tree so that every node in the fragment learns the
-new identity.
+The root ($v$ and $r$ of the previous phase) broadcasts the change down the tree so that
+every node in the fragment learns the new identity.
 
 Each receiving node updates its local identity, enters the \emph{reiden} state, and
 forwards the message to its children.
@@ -170,10 +172,10 @@ have been received from \emph{all} children before propagating the echo upward.
 When the root collects acknowledgements from every child, every node in the fragment
 shares the same identity and this phase is complete.
 
-\paragraph{Minimum outgoing edge search.}
+\paragraph{Phase 3. Minimum outgoing edge search.}
 
 The goal of this phase is to identify the minimum-weight edge crossing the boundary
-between the fragment $F$ and the rest of the network.
+between the fragment and the rest of the network.
 Two algorithms with different properties are provided.
 
 \subparagraph{Naive.}
@@ -182,30 +184,29 @@ The root starts an echo wave down the tree to collect information about outgoing
 
 Each node receiving the echo wave:
 \begin{itemize}
-\item collects its outgoing edges by comparing its own identity with the identities
-reported by its neighbors. To do so, it sends a \textsc{Test} message in each non-tree
-link, together with its own identity. The neighbor replies positively if its identity is
-different. The neighbors that replied positively are connected by outgoing edges, and
-their weights are reported back to the sender.
-\item decides its local MOE (the minimum-weight outgoing edge among its own outgoing edges
+\item Collects its outgoing edges by comparing its own identity with the identities
+reported by its neighbors. To do so, it sends a message in each non-tree link, together
+with its own identity. The neighbor replies positively if its identity is different. The
+neighbors that replied positively are connected by outgoing edges, and their weights are
+reported back to the sender.
+\item Decides its local MOE (the minimum-weight outgoing edge among its own outgoing edges
 and those reported by its children).
-\item sends the local MOE to its parent.
+\item Sends the local MOE to its parent.
 \end{itemize}
 
 When the root has received all replies, it determines the global MOE of the fragment. If
 no outgoing edge was found the protocol terminates, as the fragment is isolated from the
-rest of the network. Otherwise, the root enters the \emph{merge} state and proceeds to the
-next phase.
+rest of the network. Otherwise, the root enters phase 4 (\emph{merge} state).
 
-This implementation is simple and deterministic, but its message complexity is $O(e)$
+This implementation is simple and deterministic, but its message complexity is $O(|E|)$
 since every node must test all its incident edges.
 
 \subparagraph{Binary search.\cite{king2015constructionimprompturepairmst}}
 
-For dense networks where $e = \Omega(n\log n)$, the $O(e)$ cost of the naive phase 3
-dominates the overall failure-response complexity.
+For dense networks where $|E| = \Omega(N\log N)$, the $O(|E|)$ cost of the naive phase 3
+dominates the overall failure response complexity.
 
-We propose an alternative approach to lower the complexity to $O(n\log n)$ in the average
+We propose an alternative approach to lower the complexity to $O(N\log N)$ in the average
 case.
 \smallskip
 
@@ -214,9 +215,9 @@ case.
 Property: an outgoing edge is incident to exactly one node in the fragment, while an
 internal edge is incident to two nodes in the fragment.
 
-The idea of the \textsc{TestOut} primitive is to exploit this property to determine
-whether any outgoing edge exists in a given weight interval $[a,b]$ by computing the
-XOR of the identifiers of all edges in that interval:
+The idea of the \textsc{TestOut}$(F,\,a,\,b)$ procedure is to exploit this property to
+determine whether any outgoing edge exists in the fragment $F$, in a given weight interval
+$[a,b]$ by computing the XOR of the identifiers of all edges in that interval:
 \begin{itemize}
 \item Internal edges are counted twice (once by each endpoint) and therefore cancel out in
 the XOR: $a \oplus a = 0$.
@@ -227,8 +228,9 @@ remain in the XOR.
 In particular, each edge $e = (u,v)$ is assigned a symmetric unique identifier
 $\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$. Each node computes the XOR of the identifiers of its incident edges whose weights fall in $[a,b]$:
 $$
-x_v = \bigoplus_{e \in \delta(v) \cap [a,b]} \mathrm{id}(e)
+x_v = \bigoplus_{e \in \delta(v) \land w(e) \in [a,b]} \mathrm{id}(e)
 $$
+where $\delta(v)$ is the set of edges incident to $v$.
 
 The root collects the $x_v$ values from all nodes in the fragment and aggregates:
 $$
@@ -239,90 +241,9 @@ If $X = 0$, no outgoing edge exists in the interval; otherwise, at least one out
 exists.
 
 This procedure is just a broadcast (of the interval) followed by an echo (of the local XOR
-values), and therefore costs $O(n)$ messages.
+values), and therefore costs $O(N)$ messages.
 
-\medskip
-
-\noindent\textbf{The binary search.}
-
-Now that we can test for the existence of outgoing edges in a given weight interval, we
-can perform a binary search over the range of possible edge weights to find the
-minimum-weight outgoing edge.
-
-\begin{enumerate}
- 
-    \item \textbf{Initialize.}
-        The root sets the search interval $[a,b] \gets [1, W]$, where $W$ is the
-        maximum possible edge weight, known to all nodes as a system parameter.
-
-    \item \textbf{Check existence.}
-        Run \textsc{TestOut}$(F,\,1,\,W)$.
-        If the result is zero, no outgoing edge exists, the root broadcasts
-        \msg{GoSleep} and all nodes enter the \emph{sleep} state.
-        Otherwise continue.
- 
-    \item \textbf{Estimate the median.}
-        The root broadcasts the current interval $[a,b]$. Each node $v$ assigns a
-        \emph{priority} to each of its incident non-tree edges $e$ whose weight falls in
-        $[a,b]$:
-        \[
-            \mathrm{priority}(e)
-            \;=\;
-            H\!\left(s_{\mathrm{sk}} \;\|\; \mathrm{id}(e)\right),
-        \]
-        Each node retains only the $k$ edges with the \emph{smallest} priority values,
-        discarding all others. Because the hash function $H$ acts as a random oracle,
-        keeping the $k$ edges with the smallest priority values is equivalent to drawing a
-        uniform random sample of size $k$ without replacement from the $N$ edges currently
-        in $[a,b]$. 
-
-        During the convergecast, each internal node merges its own set of edges with those
-        received from its children, deduplicates by edge identifier, and forwards the $k$
-        globally smallest priorities to its parent.
-        The root collects approximately $k$ uniformly random non-tree edges from across
-        the fragment; the \textbf{median of their weights} is used as the split point~$m$.
-        Because this procedure consists of a single broadcast followed by a convergecast
-        carrying at most $k$ (a constant) items per message, it requires $\mathcal{O}(n)$
-        message complexity.
-
-        By Hoeffding's inequality\footnote{While Hoeffding's inequality formally bounds
-        the mean of random variables, we apply it here to the indicator variables
-        representing whether a sampled edge falls below a given population quantile. This
-        bounds the probability of the sample median deviating from the true median.}, the
-        probability that the sample median falls outside the $[1/4, 3/4]$ quantile range
-        of the true edge weights is bounded by $2\exp(-k/8)$.
-
-        Thus, for a sufficiently large constant $k$, the chosen split point $m$ shrinks
-        the search space by a constant fraction with high constant probability. Over the
-        course of the algorithm, this guarantees that the interval shrinks to a single
-        edge in $\mathcal{O}(\log N)$ rounds in expectation.
- 
-    \item \textbf{Test both halves.}
-          Run \textsc{TestOut} on $[a,m]$ and $[m{+}1,b]$. The root narrows the search to
-          the \emph{lighter} sub-interval that contains at least one outgoing edge:
-          \[
-              [a,b] \;\gets\;
-              \begin{cases}
-                  [a,\,m]     & \text{if } \textsc{TestOut} [a,\,m] \neq 0 \\
-                  [m{+}1,\,b] & \text{otherwise.}
-              \end{cases}
-          \]
- 
-    \item \textbf{Iterate.}
-          For the new interval $[a,b]$, we iterate the algorithm by computing the new median and splitting the interval again. Because the interval strictly shrinks at each step, it eventually collapses to a single weight value $a = b = w^*$, which uniquely identifies the MOE weight.
- 
-    \item \textbf{Identify the edge.}
-          When $a = b = w^*$, the root broadcasts $w^*$.
-          Since edge weights are globally distinct (a standing assumption of the
-          protocol), at most one node $p$ in $F$ holds an incident non-tree edge of
-          weight~$w^*$.
-          Node $p$ sends $\textsc{Test}\langle id \rangle$ over that edge; since the binary
-          search confirmed an outgoing edge at weight $w^*$, the response is guaranteed
-          to be \textsc{Accept}.
-          Node $p$ thereby becomes the confirmed MOE holder and proceeds to Phase~4.
- 
-\end{enumerate}
-
+\begin{comment}
 \smallskip % Collisions do not happen anymore since now we arn't using an hash function, right?
 \noindent\emph{Collisions:} The XOR test has no false positives: if $X \neq 0$ then at
 least one outgoing edge exists in the interval. However, it may have false negatives if
@@ -338,28 +259,102 @@ This follows because the XOR of independent, uniformly distributed $m$-bit
 values is itself uniformly distributed over the $2^m$ possible bit patterns.
 Therefore the aggregate hash is equally likely to be any $m$-bit string, and
 the probability of obtaining the all-zero value is exactly $1/2^m$.
+\end{comment}
 
+\medskip
 
-\paragraph{Fragment merge.}
+\noindent\textbf{The binary search.}
+
+Now that we can test for the existence of outgoing edges in a given weight interval, we
+can perform a binary search over the range of possible edge weights to find the
+minimum-weight outgoing edge.
+
+\begin{enumerate}
+ 
+    \item \textbf{Initialize.}
+        The root sets the search interval $[a,b] \gets [-\infty, \infty]$.
+
+    \item \textbf{Check existence.}
+        Run \textsc{TestOut}$(F,\,a,\,b)$.
+        If the result is zero, no outgoing edge exists, the root broadcasts a sleep
+        message and all nodes enter the \emph{sleep} state.
+        Otherwise continue.
+ 
+    \item \textbf{Estimate the median.}
+        The root broadcasts the current interval $[a,b]$. Each node $v$ assigns a
+        \emph{priority} to each of its incident non-tree edges $e$ whose weight falls in
+        $[a,b]$:
+        \[
+            \mathrm{priority}(e)
+            \;=\;
+            H\!\left(\mathrm{id}(e)\right),
+        \]
+        where $H$ is an hash function.
+
+        Each node retains only the $k$ edges with the \emph{smallest} priority values,
+        discarding all others. Because the hash function $H$ acts as a random oracle,
+        keeping the $k$ edges with the smallest priority values is equivalent to drawing a
+        uniform random sample of size $k$ without replacement from the $N$ edges currently
+        in $[a,b]$.
+
+        During the convergecast, each internal node merges its own set of edges with those
+        received from its children, deduplicates them by edge identifier, and forwards the
+        $k$ globally smallest priorities to its parent.
+        The root collects $k$ uniformly random non-tree edges from across the fragment;
+        the \textbf{median of their weights} is used as the split point $m$.
+        Because this procedure consists of a single broadcast followed by a convergecast
+        carrying at most $k$ (a constant) items per message, it requires $\mathcal{O}(N)$
+        message complexity.
+
+        By Hoeffding's inequality\footnote{While Hoeffding's inequality formally bounds
+        the mean of random variables, we apply it here to the indicator variables
+        representing whether a sampled edge falls below a given population quantile. This
+        bounds the probability of the sample median deviating from the true median.}, the
+        probability that the sample median falls outside the $[1/4, 3/4]$ quantile range
+        of the true edge weights is bounded by $2\exp(-k/8)$.
+
+        Thus, for a sufficiently large constant $k$, the chosen split point $m$ shrinks
+        the search space by a constant fraction with high constant probability. Over the
+        course of the algorithm, this makes the interval shrink to a single edge in
+        $\mathcal{O}(\log N)$ expected rounds.
+ 
+    \item \textbf{Test both halves.}
+          Run \textsc{TestOut} on $[a,m]$ and $(m,b]$. The root narrows the search to
+          the \emph{lighter} sub-interval that contains at least one outgoing edge:
+          \[
+              [a,b] \;\gets\;
+              \begin{cases}
+                  [a,\,m]     & \text{if } \textsc{TestOut} (_,\,a,\,m) \neq 0 \\
+                  (m,\,b] & \text{otherwise.}
+              \end{cases}
+          \]
+ 
+    \item \textbf{Iterate.}
+          For the new interval $[a,b]$, we iterate the algorithm by computing the new median and splitting the interval again. Because the interval strictly shrinks at each step, it eventually collapses to a single weight value $a = b = w^*$, which uniquely identifies the MOE weight.
+ 
+    \item \textbf{Identify the edge.}
+          When $a = b = w^*$, the root broadcasts the id of the edge with weight $w^*$. % (belonging to its list of k edges arrived to root).
+          The endpoint $p$ of that edge in the fragment holds the MOE.
+ 
+\end{enumerate}
+
+\paragraph{Phase 4. Fragment merge.}
 
 The root sends a message down the tree to inform the node $p$ at the MOE that it needs to
 connect to the neighboring fragment.
-
-Upon receiving this message, $p$ sends \msg{Connect}$\langle id \rangle$ over the MOE to
-the endpoint in the neighboring fragment.
 
 The two fragments then merge into a single extended fragment. If no further topological
 changes have occurred in the meantime, the protocol proceeds identically to GHS: the
 merged fragment elects a new root, generates a new identity, and begins a fresh MOE search
 for the next phase of tree construction.
 
-If a concurrent topological changes have occurred while this process was in progress, the
+If a concurrent topological change have occurred while this process was in progress, the
 fragment identity mechanism handles them correctly: any messages carrying a superseded
 identity are silently discarded, and the most recent failure or addition initiates a new
 protocol round with a fresh identity.
 
 \paragraph{Complexity.}
-We already argued that TestOut and the median approximation protocols have $O(n)$ message complexity. In the average case, the binary search over the edges requires $O(\log n)$ iterations to converge to a single weight value. Therefore, the overall message complexity of the binary search approach is $O(n \log n)$ in the average case. Each message carries a constant number of identifiers and weights, so the message size is $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
+We already argued that TestOut and the median approximation protocols have $O(N)$ message complexity. In the average case, the binary search over the edges requires $O(\log N)$ iterations to converge to a single weight value. Therefore, the overall message complexity of the binary search approach is $O(N \log N)$ in the average case. Each message carries a constant number of identifiers and weights, so the message size is $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
 %TODO: say something on the memory used by each node
 
 \subsubsection{Addition response protocol}
@@ -367,9 +362,8 @@ We already argued that TestOut and the median approximation protocols have $O(n)
 When a link $e = (u,v)$ is added to the network, two cases arise depending on whether
 its endpoints belong to the same fragment or to different fragments.
 
-To check whether $u$ and $v$ are in the same fragment, each endpoint sends a
-\msg{IdCheck}$\langle id \rangle$ message to the other, where $id$ is the sender's current
-fragment identity.
+To check whether $u$ and $v$ are in the same fragment, each endpoint sends a message
+containing its $id$ to the other.
  
 \paragraph{Same fragment.}
 If $u$ and $v$ are in the same fragment (i.e., they have the same fragment identity), the
@@ -379,9 +373,7 @@ To preserve the MST property, the maximum-weight edge in that cycle must be iden
 removed. The addition response proceeds in three phases.
 
 % TODO: Failure during addition:
-% - If u is a lca of an addition event during a deletion: u will hold the REPLACE message until
-%   the failure is resolved. - FATTO
-% - A link in the cycle fails during an addtion: the messages will be discarded because they
+% - A link in the cycle fails during an addition: the messages will be discarded because they
 %   contain the old fragment identity. - NON SERVE? (capitolo 4.3)
 
 % TODO: When changing the graph because of an addition we need to hold messages - NON SERVE? (capitolo 4.3)
@@ -421,14 +413,14 @@ the message containing $w$, to the children that reported the maximum weight in 
   \item If a node that receives the message is adjacent to the link with
         the maximum weight, it removes that link from the MST and will forward 
         to the next node of the cycle the message:
-        \msg{Replace}$\langle id,\, w(e), \infty \rangle$
+        \msg{Replace}$\langle id,\, w(e), \infty \rangle$.
   \item A node, that is not $u$ or $v$, that receives a \msg{Replace} message with $w = \infty$ 
-        forwards it to the next node in the cycle and then reverses the parent-child relation
+        forwards it to the next node in the cycle and then reverses the parent-child relation.
   \item When $u$ (resp. $v$) receives a \msg{Replace} message with $a = u$(resp. $a = v$) and 
         $w = \infty$, adds the new link $(u,v)$ (resp. $(v,u)$) to the MST.
 \end{itemize}
 
-      The new link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
+The new link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
 the weight of the maximum-weight edge in the cycle.
 
 \begin{figure}[htbp]
@@ -443,7 +435,7 @@ the weight of the maximum-weight edge in the cycle.
 Multiple concurrent additions within the same fragment may involve overlapping cycles.
 
 Processing them independently may lead to inconsistencies: two LCAs may each remove the
-same edge, leaving a cycle in the MST.
+same edge, leaving a cycle in the MST (figure \ref{fig:overlapping_cycles}).
 
 \begin{figure}[htbp]
 \centering
@@ -490,7 +482,7 @@ Naively, we could try to avoid this problem by making nodes that forwarded an
 forwarding any other \msg{Addition} message.
 
 However, this approach may lead to deadlocks: two LCAs may each wait for a message that
-has been blocked by the other's addition process.
+has been blocked by the other's addition process (figure \ref{fig:lca_serialization}).
 
 \begin{figure}[htbp]
 \centering
@@ -536,7 +528,7 @@ has been blocked by the other's addition process.
     \draw[recovered_edge] (up) -- node[above] {$e'$} (vp);
 
 \end{tikzpicture}
-\caption{Interaction and deadlock avoidance using privilege tokens at the root.}
+\caption{Both $lca(e)$ and $lca(e')$ will not receive messages on one side of the cycle.}
 \label{fig:lca_serialization}
 \end{figure}
  
@@ -552,16 +544,28 @@ which travels down the same path and then around the cycle, releasing any blocke
 addition messages with $w$ weight (i.e. for the event selected by the root) are released,
 while other addition messages remain blocked until their turn comes.
 
-A node holding a blocked \msg{Addition}$\langle id,\, w,\, _,\, _ \rangle$ forwards it upon
-receiving \msg{Privilege}$\langle id,\, w \rangle$, allowing the LCA to eventually collect
-both halves of the addition.
+A node holding a blocked \msg{Addition}$\langle id,\, w,\, _,\, _ \rangle$ forwards it
+upon receiving \msg{Privilege}$\langle id,\, w \rangle$, allowing the LCA to eventually
+collect both halves of the addition.
 
 The root thus enforces a total order on concurrent additions, eliminating all deadlocks.
 
-% TODO: argue about the fact that even with this procedure, additions with
-% non-overlapping cycles are processed concurrently
+\subparagraph{Concurrency of non-overlapping additions.}
 
-% TODO: argue correctness?
+Although the root imposes a total order on addition events by issuing \msg{Privilege}
+tokens, this serialization does not prevent concurrent execution across the network. 
+
+First, the discovery phase is fully distributed. When multiple links are added, their
+endpoints independently propagate \msg{Addition} messages up to their respective LCAs. The
+computation of the maximum-weight edge for each cycle happens entirely in parallel before
+the root is ever involved.
+
+Second, the root acts as a dispatcher rather than a blocking bottleneck. By issuing
+\msg{Privilege} tokens sequentially down the tree, the root pipelines the resolution
+phases. Because non-overlapping cycles consist of disjoint sets of tree edges, their
+respective \msg{Privilege} and \msg{Replace} messages route through completely different
+subtrees. They do not compete for the same links or node states. Consequently, once the
+tokens are dispatched, multiple topology updates safely execute in parallel.
 
 \paragraph{Different fragments.}
 If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
@@ -572,19 +576,20 @@ there can be two different cases:
         (or $v$) sends a request to the root of its fragment to add the link $(u,v)$ to 
         the MST.
   \item Otherwise, a failure response protocol is already in progress. In this case the
-        failure needs to be resolved first: node $u$ and $v$ will wait for \msg{REIDEN}
-      message and check again if the they are in the same fragment, when they do the 
-      addition response protocol will be started. If they are still in different fragments
-        eventually they will go in sleep state and the first case will be applied.
+        failure needs to be resolved first: node $u$ and $v$ will wait for new identities
+        of their fragments, and check again if the they are in the same fragment. If they
+        do, the addition response protocol can be started. If they are still in different
+        fragments eventually they will go in sleep state and the first case will be
+        applied.
 \end{itemize}
 
 \paragraph{Complexity.}
-A single addition costs $O(n)$ messages: the \msg{Addition} messages travel only in one direction along
+A single addition costs $O(N)$ messages: the \msg{Addition} messages travel only in one direction along
 tree links, and the \msg{Replace} phase traverses the cycle, which is also a subset of
 tree links. The message size is $O(\log ID + \log W)$ bits, where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
 
-\section{Physical architecture and deployment}
-Which nodes and platforms involved, and where each component is deployed.
+% \section{Physical architecture and deployment}
+% Which nodes and platforms involved, and where each component is deployed.
 
 \section{Development plan}
 % Since it is difficult to predict just how hard implementing a new system will be, you should formulate as a set of ``tiers,'' where the basic tier is something you’re sure you can complete, and the additional tiers add more features, at both the application and the system leve
@@ -593,27 +598,27 @@ The implementation will be organized in cumulative tiers, starting from a minima
 baseline and progressively adding the dynamic behavior described in the previous
 sections. 
 
-\paragraph{Tier 1: GHS baseline.}
+\paragraph{Tier 1. GHS baseline.}
 The first milestone is a static distributed MST implementation based on the
 Gallager Humblet Spira algorithm. This version establishes the basic distributed
 infrastructure, including message passing, fragment management, and root election, but
 assumes that the network topology remains stable after the initial construction.
 
-\paragraph{Tier 2: Dynamic repair with the naive deletion phase.}
+\paragraph{Tier 2. Dynamic repair with the naive deletion phase.}
 The second milestone extends the baseline with our dynamic repair algorithm for
-link failures, using the $O(|E|)$ naive Phase~3 described in this chapter. At this stage
+link failures, using the $O(|E|)$ naive Phase 3 described in this chapter. At this stage
 the system handles one topological event at a time and does not yet support concurrent
 failures or additions. This tier is intended to validate the correctness of the failure
 response protocol and the fragment reidentification mechanism.
 
-\paragraph{Tier 3: Full dynamic algorithm.}
+\paragraph{Tier 3. Full dynamic algorithm.}
 The third milestone adds the complete behavior of the system: the binary-search-based
 minimum outgoing edge search, addition handling, and the mechanisms needed to cope with
 concurrent failures and additions. At the end of this stage, the implementation should
 match the full protocol described in the project chapter.
 
-\paragraph{Tier 4: Additional improvements.}
+\paragraph{Tier 4. Additional improvements.}
 If time permits, the final tier will explore optional enhancements that are not required
 for the core project. Possible extensions include alternative methods for estimating the
-median during Phase~3, such as a distributed selection algorithm, and further
+median during Phase 3, such as a distributed selection algorithm, and further
 optimizations.
