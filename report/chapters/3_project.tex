@@ -281,6 +281,9 @@ minimum-weight outgoing edge.
         globally smallest priorities to its parent.
         The root collects approximately $k$ uniformly random non-tree edges from across
         the fragment; the \textbf{median of their weights} is used as the split point~$m$.
+        Because this procedure consists of a single broadcast followed by a convergecast
+        carrying at most $k$ (a constant) items per message, it requires $\mathcal{O}(n)$
+        message complexity.
 
         By Hoeffding's inequality\footnote{While Hoeffding's inequality formally bounds
         the mean of random variables, we apply it here to the indicator variables
@@ -320,7 +323,7 @@ minimum-weight outgoing edge.
  
 \end{enumerate}
 
-\smallskip
+\smallskip % Collisions do not happen anymore since now we arn't using an hash function, right?
 \noindent\emph{Collisions:} The XOR test has no false positives: if $X \neq 0$ then at
 least one outgoing edge exists in the interval. However, it may have false negatives if
 two or more outgoing edges exist in the interval and their identifiers happen to cancel
@@ -353,12 +356,11 @@ for the next phase of tree construction.
 If a concurrent topological changes have occurred while this process was in progress, the
 fragment identity mechanism handles them correctly: any messages carrying a superseded
 identity are silently discarded, and the most recent failure or addition initiates a new
-protocol round with a fresh identity. % da qualche parte dobbiamo dire che potrebbero esserci versioni diverse del MST in giro per la rete allo stesso tempo (se un nodo non ha ancora ricevuto il broadcast con il nuovo id)
+protocol round with a fresh identity.
 
 \paragraph{Complexity.}
-We already argued that the protocol to find the approximate median has $O(n)$ message complexity. The same argument can be applied to the \textsc{TestOut} primitive, which is also a broadcast followed by an echo. In the average case, the binary search over the edges requires $O(\log n)$ iterations to converge to a single weight value. Therefore, the overall message complexity of the binary search approach is $O(n \log n)$ in the average case. Each message carries a constant number of identifiers and weights, so the message size is $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
+We already argued that TestOut and the median approximation protocols have $O(n)$ message complexity. In the average case, the binary search over the edges requires $O(\log n)$ iterations to converge to a single weight value. Therefore, the overall message complexity of the binary search approach is $O(n \log n)$ in the average case. Each message carries a constant number of identifiers and weights, so the message size is $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
 %TODO: say something on the memory used by each node
-
 
 \subsubsection{Addition response protocol}
  
@@ -436,9 +438,6 @@ the weight of the maximum-weight edge in the cycle.
 \label{fig:addition}
 \end{figure}
 
-
-
-% TODO: leggere deadlock
 \subparagraph{Overlapping cycles serialization.}
 
 Multiple concurrent additions within the same fragment may involve overlapping cycles.
