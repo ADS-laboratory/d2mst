@@ -1,5 +1,7 @@
 # Gleam
-build/
+*.beam
+*.ez
+/build
 erl_crash.dump
 
 # Latex
