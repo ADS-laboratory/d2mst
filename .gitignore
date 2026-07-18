@@ -1,3 +1,7 @@
+# Gleam
+build/
+erl_crash.dump
+
 # Latex
 *.aux
 *.bbl
