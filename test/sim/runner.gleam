@@ -11,16 +11,7 @@ import gleam/list
 pub fn run(g: Graph) -> Dict(NodeId, node.State) {
   let states =
     list.fold(g.nodes, dict.new(), fn(d, n) {
-      let incident =
-        graph.incident(g, n)
-        |> list.map(fn(e) {
-          let peer = case e.u == n {
-            True -> e.v
-            False -> e.u
-          }
-          #(graph.edge_id(e.u, e.v), peer, e.weight)
-        })
-      dict.insert(d, n, node.init(n, incident))
+      dict.insert(d, n, node.init(n, graph.incident(g, n)))
     })
   let wakeups = list.map(g.nodes, fn(n) { #(n, node.Wakeup) })
   loop(states, wakeups)

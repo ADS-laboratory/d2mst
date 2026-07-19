@@ -71,21 +71,27 @@ pub type State {
 pub type Event {
   Wakeup
   Receive(on: EdgeId, msg: message.Msg)
+  /// The link carrying this edge died: the edge was deleted, or the peer
+  /// node crashed. Both endpoints of the link observe this event.
+  LinkDown(on: EdgeId)
 }
 
 pub type Effect {
   Send(on: EdgeId, msg: message.Msg)
 }
 
-/// `incident` lists the node's edges as (edge id, peer node, raw weight).
-pub fn init(id: NodeId, incident: List(#(EdgeId, NodeId, Int))) -> State {
+/// `incident` lists the graph edges this node is an endpoint of.
+pub fn init(id: NodeId, incident: List(Edge)) -> State {
   let edges =
     list.fold(incident, dict.new(), fn(d, e) {
-      let #(eid, peer, w) = e
+      let peer = case e.u == id {
+        True -> e.v
+        False -> e.u
+      }
       dict.insert(
         d,
-        eid,
-        EdgeInfo(peer:, edge: graph.Edge(eid.low, eid.high, w), status: Basic),
+        graph.edge_id(e.u, e.v),
+        EdgeInfo(peer:, edge: e, status: Basic),
       )
     })
   State(
@@ -101,6 +107,24 @@ pub fn init(id: NodeId, incident: List(#(EdgeId, NodeId, Int))) -> State {
     find_count: 0,
     halted: False,
     pending: [],
+  )
+}
+
+/// Register a newly added incident edge. Tier 3: this is where the addition
+/// response protocol will be triggered; for now the node just learns the
+/// edge exists.
+pub fn add_edge(state: State, edge: Edge) -> State {
+  let peer = case edge.u == state.id {
+    True -> edge.v
+    False -> edge.u
+  }
+  State(
+    ..state,
+    edges: dict.insert(
+      state.edges,
+      graph.edge_id(edge.u, edge.v),
+      EdgeInfo(peer:, edge:, status: Basic),
+    ),
   )
 }
 
@@ -140,6 +164,10 @@ fn drain(state: State) -> #(State, List(Effect)) {
 fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
   case event {
     Wakeup -> wakeup(state)
+    // Tier 2: the failure response protocol (fragment split, re-iden, MOE
+    // search) starts here. Until then the node keeps its state; the shell
+    // has already dropped the link, so nothing more is sent on the edge.
+    LinkDown(_) -> #(state, [])
     Receive(on, msg) ->
       case dict.has_key(state.edges, on) {
         // Message on an edge we do not know: ignore (future tiers: removed edges).
@@ -500,10 +528,14 @@ pub fn summarise(state: State) -> Summary {
 
 pub type CtlMsg {
   /// Wire the node to its link actors. Sent once by the network before any
-  /// wakeup.
-  Attach(links: Dict(EdgeId, Subject(link.Msg)))
+  /// wakeup. The node monitors every link process.
+  Attach(links: Dict(EdgeId, link.Handle))
+  /// A single new link was added to the running network (tier 3).
+  AttachEdge(edge: Edge, link: link.Handle)
   Wake
   FromLink(on: EdgeId, msg: message.Msg)
+  /// A monitored process (a link) went down.
+  MonitorDown(down: process.Down)
   GetSummary(reply: Subject(Summary))
 }
 
@@ -518,14 +550,14 @@ pub type Handle {
 type Shell {
   Shell(
     core: State,
-    links: Dict(EdgeId, Subject(link.Msg)),
+    links: Dict(EdgeId, link.Handle),
     logger: Option(Subject(logger.Msg)),
   )
 }
 
 pub fn start(
   id: NodeId,
-  incident: List(#(EdgeId, NodeId, Int)),
+  incident: List(Edge),
   lg: Option(Subject(logger.Msg)),
 ) -> Handle {
   let assert Ok(started) =
@@ -537,6 +569,7 @@ pub fn start(
         |> process.select_map(delivery, fn(d: message.Delivery) {
           FromLink(d.on, d.msg)
         })
+        |> process.select_monitors(MonitorDown)
       actor.initialised(Shell(init(id, incident), dict.new(), lg))
       |> actor.selecting(selector)
       |> actor.returning(#(control, delivery))
@@ -544,15 +577,46 @@ pub fn start(
     })
     |> actor.on_message(shell_handle)
     |> actor.start
+  // Free-standing process: crash_node kills it, and that death must not
+  // propagate to whoever built the network.
+  process.unlink(started.pid)
   let #(control, delivery) = started.data
   Handle(pid: started.pid, control:, delivery:)
 }
 
 fn shell_handle(shell: Shell, msg: CtlMsg) -> actor.Next(Shell, CtlMsg) {
   case msg {
-    Attach(links) -> actor.continue(Shell(..shell, links:))
+    Attach(links) -> {
+      dict.to_list(links)
+      |> list.each(fn(p) { process.monitor({ p.1 }.pid) })
+      actor.continue(Shell(..shell, links:))
+    }
+    AttachEdge(edge, l) -> {
+      process.monitor(l.pid)
+      actor.continue(
+        Shell(
+          ..shell,
+          core: add_edge(shell.core, edge),
+          links: dict.insert(shell.links, graph.edge_id(edge.u, edge.v), l),
+        ),
+      )
+    }
     Wake -> run(shell, Wakeup)
     FromLink(on, m) -> run(shell, Receive(on, m))
+    MonitorDown(down) ->
+      case down {
+        process.ProcessDown(pid: pid, ..) ->
+          case dict.to_list(shell.links) |> list.find(fn(p) { { p.1 }.pid == pid }) {
+            Ok(#(eid, _)) ->
+              run(
+                Shell(..shell, links: dict.delete(shell.links, eid)),
+                LinkDown(eid),
+              )
+            // Not one of our links (already replaced, or unknown): ignore.
+            Error(_) -> actor.continue(shell)
+          }
+        process.PortDown(..) -> actor.continue(shell)
+      }
     GetSummary(reply) -> {
       process.send(reply, summarise(shell.core))
       actor.continue(shell)
@@ -566,7 +630,7 @@ fn run(shell: Shell, event: Event) -> actor.Next(Shell, CtlMsg) {
     let Send(on, m) = effect
     case dict.get(shell.links, on) {
       Ok(l) -> {
-        process.send(l, link.Transmit(core.id, m))
+        process.send(l.subject, link.Transmit(core.id, m))
         case shell.logger {
           Some(lg) -> process.send(lg, logger.Sent(core.id))
           None -> Nil

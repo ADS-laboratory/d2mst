@@ -6,6 +6,8 @@ import d2mst/graph.{type Graph, Edge, Graph}
 import d2mst/logger
 import d2mst/monitor
 import d2mst/network
+import gleam/dict
+import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import sim/generator
@@ -81,6 +83,65 @@ pub fn random_medium_actor_test() {
   list.each([42, 43, 44], fn(seed) {
     run_and_check(generator.connected(seed, 25, 20))
   })
+}
+
+// --- topology event plumbing (protocol reaction lands in tiers 2/3) --------
+
+pub fn delete_non_tree_link_test() {
+  let g =
+    Graph(nodes: [0, 1, 2], edges: [Edge(0, 1, 1), Edge(1, 2, 2), Edge(0, 2, 3)])
+  let net = network.start(g, None)
+  network.wake_all(net)
+  let assert Ok(_) = monitor.await_halt(net, 200, 10)
+  // Deleting the non-tree edge kills its link process; both endpoints
+  // observe LinkDown. The MST of the remaining graph is unchanged, so the
+  // system must still be consistent.
+  let net = network.fail_link(net, 0, 2)
+  process.sleep(50)
+  assert oracle.check(net.graph, monitor.snapshot(net, 1000)) == Ok(Nil)
+}
+
+pub fn delete_tree_link_liveness_test() {
+  // Repairing a broken tree is tier 2; today the endpoints must observe the
+  // death without crashing and keep answering the monitor.
+  let g =
+    Graph(nodes: [0, 1, 2], edges: [Edge(0, 1, 1), Edge(1, 2, 2), Edge(0, 2, 3)])
+  let net = network.start(g, None)
+  network.wake_all(net)
+  let assert Ok(_) = monitor.await_halt(net, 200, 10)
+  let net = network.fail_link(net, 0, 1)
+  process.sleep(50)
+  assert list.length(monitor.snapshot(net, 1000)) == 3
+}
+
+pub fn node_crash_cascades_to_links_test() {
+  let g =
+    Graph(nodes: [0, 1, 2], edges: [Edge(0, 1, 1), Edge(0, 2, 2), Edge(1, 2, 3)])
+  let net = network.start(g, None)
+  network.wake_all(net)
+  let assert Ok(_) = monitor.await_halt(net, 200, 10)
+  let assert Ok(l01) = dict.get(net.links, graph.edge_id(0, 1))
+  let assert Ok(l02) = dict.get(net.links, graph.edge_id(0, 2))
+  // Killing node 0 must take both of its links down with it (the links
+  // monitor their endpoints), while the survivors keep responding.
+  let net = network.crash_node(net, 0)
+  process.sleep(100)
+  assert !process.is_alive(l01.pid)
+  assert !process.is_alive(l02.pid)
+  assert list.length(monitor.snapshot(net, 1000)) == 2
+}
+
+pub fn add_link_test() {
+  let g = Graph(nodes: [0, 1, 2], edges: [Edge(0, 1, 1), Edge(1, 2, 2)])
+  let net = network.start(g, None)
+  network.wake_all(net)
+  let assert Ok(_) = monitor.await_halt(net, 200, 10)
+  // A new heavy edge does not change the MST; the endpoints learn it
+  // (AttachEdge) and the system stays consistent. The addition response
+  // protocol itself is tier 3.
+  let net = network.add_link(net, Edge(0, 2, 10))
+  process.sleep(50)
+  assert oracle.check(net.graph, monitor.snapshot(net, 1000)) == Ok(Nil)
 }
 
 pub fn message_complexity_is_recorded_test() {

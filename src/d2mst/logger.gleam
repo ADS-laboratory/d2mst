@@ -32,6 +32,9 @@ pub fn start() -> Subject(Msg) {
     actor.new(State(dict.new(), []))
     |> actor.on_message(handle)
     |> actor.start
+  // Interface component: it may crash (or be killed in tests) without
+  // taking the rest of the system down.
+  process.unlink(started.pid)
   started.data
 }
 

@@ -1,66 +1,81 @@
 //// Link actor: the communication channel between two neighboring nodes.
 ////
-//// Every edge of the graph is one of these processes. Nodes never hold each
-//// other's subjects — they only talk to links — so this is the single place
-//// where failures are injected and, in later tiers, where message
-//// drop/delay/reorder chaos and endpoint-crash detection (BEAM monitors
-//// turning a node crash into link failures for the neighbors) will live.
+//// Every edge of the graph is one of these processes, and the process *is*
+//// the edge: deleting the edge means killing the process — there is no
+//// polite "failed" state. Endpoint nodes monitor their links and observe
+//// the death as a `LinkDown` event; a re-added edge is a brand new link
+//// process (and, protocol-wise, a brand new edge).
+////
+//// The link also monitors both endpoint nodes and stops itself when either
+//// dies. This cascade is what reduces node crashes to edge failures: a
+//// crashed node takes all its links down, and every neighbor observes
+//// ordinary link failures.
+////
+//// Later tiers can add chaos injection here (message drop/delay/reorder on
+//// a *living* link) without touching the nodes.
 
-import d2mst/graph.{type EdgeId, type NodeId}
+import d2mst/graph.{type Edge, type EdgeId, type NodeId}
 import d2mst/message.{type Delivery, Delivery}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/otp/actor
+
+/// One end of the link: the node's process (monitored) and the subject the
+/// link delivers messages to.
+pub type Endpoint {
+  Endpoint(pid: Pid, delivery: Subject(Delivery))
+}
+
+pub type Handle {
+  Handle(pid: Pid, subject: Subject(Msg))
+}
 
 pub type Msg {
   /// Relay a protocol message from one endpoint to the other.
   Transmit(from: NodeId, payload: message.Msg)
-  /// Take the link down: messages are silently dropped (tier 2+).
-  Fail
-  /// Bring the link back up (tier 2+).
-  Restore
+  /// One of the endpoint nodes died (monitor notification).
+  EndpointDown
 }
 
 type State {
-  State(
-    id: EdgeId,
-    a_node: NodeId,
-    a: Subject(Delivery),
-    b_node: NodeId,
-    b: Subject(Delivery),
-    up: Bool,
-  )
+  State(edge: Edge, id: EdgeId, u: Endpoint, v: Endpoint)
 }
 
-pub fn start(
-  id: EdgeId,
-  a_node: NodeId,
-  a: Subject(Delivery),
-  b_node: NodeId,
-  b: Subject(Delivery),
-) -> Subject(Msg) {
+/// `u` must be the endpoint of node `edge.u`, and `v` the one of node
+/// `edge.v` — the pairing is what routes messages to the other endpoint.
+pub fn start(edge: Edge, u: Endpoint, v: Endpoint) -> Handle {
   let assert Ok(started) =
-    actor.new(State(id:, a_node:, a:, b_node:, b:, up: True))
+    actor.new_with_initialiser(1000, fn(subject) {
+      process.monitor(u.pid)
+      process.monitor(v.pid)
+      let selector =
+        process.new_selector()
+        |> process.select(subject)
+        |> process.select_monitors(fn(_) { EndpointDown })
+      actor.initialised(State(edge:, id: graph.edge_id(edge.u, edge.v), u:, v:))
+      |> actor.selecting(selector)
+      |> actor.returning(subject)
+      |> Ok
+    })
     |> actor.on_message(handle)
     |> actor.start
-  started.data
+  // Free-standing process: deleting the edge means killing it, and that
+  // death must not propagate to whoever built the network.
+  process.unlink(started.pid)
+  Handle(pid: started.pid, subject: started.data)
 }
 
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Transmit(from, payload) -> {
-      case state.up {
-        True -> {
-          let target = case from == state.a_node {
-            True -> state.b
-            False -> state.a
-          }
-          process.send(target, Delivery(state.id, payload))
-        }
-        False -> Nil
+      let target = case from == state.edge.u {
+        True -> state.v.delivery
+        False -> state.u.delivery
       }
+      process.send(target, Delivery(state.id, payload))
       actor.continue(state)
     }
-    Fail -> actor.continue(State(..state, up: False))
-    Restore -> actor.continue(State(..state, up: True))
+    // A channel with one end is no channel: die, so the surviving endpoint
+    // observes an ordinary link failure.
+    EndpointDown -> actor.stop()
   }
 }

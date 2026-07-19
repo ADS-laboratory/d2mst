@@ -2,7 +2,7 @@
 //// one link actor per edge. This is the API used by the tests and the
 //// simulator to apply topology events.
 
-import d2mst/graph.{type EdgeId, type Graph, type NodeId}
+import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId, Graph}
 import d2mst/link
 import d2mst/logger
 import d2mst/node
@@ -15,30 +15,28 @@ pub type Network {
   Network(
     graph: Graph,
     nodes: Dict(NodeId, node.Handle),
-    links: Dict(EdgeId, Subject(link.Msg)),
+    links: Dict(EdgeId, link.Handle),
   )
+}
+
+fn endpoint(h: node.Handle) -> link.Endpoint {
+  link.Endpoint(pid: h.pid, delivery: h.delivery)
 }
 
 pub fn start(g: Graph, lg: Option(Subject(logger.Msg))) -> Network {
   let nodes =
     list.fold(g.nodes, dict.new(), fn(d, n) {
-      let incident =
-        graph.incident(g, n)
-        |> list.map(fn(e) {
-          let peer = case e.u == n {
-            True -> e.v
-            False -> e.u
-          }
-          #(graph.edge_id(e.u, e.v), peer, e.weight)
-        })
-      dict.insert(d, n, node.start(n, incident, lg))
+      dict.insert(d, n, node.start(n, graph.incident(g, n), lg))
     })
   let links =
     list.fold(g.edges, dict.new(), fn(d, e) {
-      let eid = graph.edge_id(e.u, e.v)
-      let assert Ok(ha) = dict.get(nodes, e.u)
-      let assert Ok(hb) = dict.get(nodes, e.v)
-      dict.insert(d, eid, link.start(eid, e.u, ha.delivery, e.v, hb.delivery))
+      let assert Ok(hu) = dict.get(nodes, e.u)
+      let assert Ok(hv) = dict.get(nodes, e.v)
+      dict.insert(
+        d,
+        graph.edge_id(e.u, e.v),
+        link.start(e, endpoint(hu), endpoint(hv)),
+      )
     })
   list.each(g.nodes, fn(n) {
     let assert Ok(h) = dict.get(nodes, n)
@@ -60,27 +58,65 @@ pub fn wake_all(net: Network) -> Nil {
   |> list.each(fn(p) { process.send({ p.1 }.control, node.Wake) })
 }
 
-// --- topology events (failure injection grows here in later tiers) ---------
+// --- topology events --------------------------------------------------------
+//
+// These mutate the running system (kill/spawn processes) and return the
+// Network value describing the new topology, so tests can keep checking
+// against the current graph.
 
-pub fn fail_link(net: Network, u: NodeId, v: NodeId) -> Nil {
-  case dict.get(net.links, graph.edge_id(u, v)) {
-    Ok(l) -> process.send(l, link.Fail)
+/// Delete an edge: kill its link process. Both endpoint nodes observe the
+/// death via their monitors as a `LinkDown` event.
+pub fn fail_link(net: Network, u: NodeId, v: NodeId) -> Network {
+  let eid = graph.edge_id(u, v)
+  case dict.get(net.links, eid) {
+    Ok(l) -> process.kill(l.pid)
     Error(_) -> Nil
   }
+  Network(
+    ..net,
+    graph: Graph(
+      ..net.graph,
+      edges: list.filter(net.graph.edges, fn(e) {
+        graph.edge_id(e.u, e.v) != eid
+      }),
+    ),
+    links: dict.delete(net.links, eid),
+  )
 }
 
-pub fn restore_link(net: Network, u: NodeId, v: NodeId) -> Nil {
-  case dict.get(net.links, graph.edge_id(u, v)) {
-    Ok(l) -> process.send(l, link.Restore)
-    Error(_) -> Nil
-  }
+/// Add an edge to the running network: spawn its link and introduce it to
+/// both endpoint nodes. A previously failed edge that comes back is simply
+/// added again — at the protocol level it is a new edge.
+pub fn add_link(net: Network, e: Edge) -> Network {
+  let assert Ok(hu) = dict.get(net.nodes, e.u)
+  let assert Ok(hv) = dict.get(net.nodes, e.v)
+  let l = link.start(e, endpoint(hu), endpoint(hv))
+  process.send(hu.control, node.AttachEdge(e, l))
+  process.send(hv.control, node.AttachEdge(e, l))
+  Network(
+    ..net,
+    graph: Graph(..net.graph, edges: [e, ..net.graph.edges]),
+    links: dict.insert(net.links, graph.edge_id(e.u, e.v), l),
+  )
 }
 
-/// Brutally kill a node process (tier 2+: neighbors will observe the crash
-/// as link failures via the link actors' monitors).
-pub fn crash_node(net: Network, n: NodeId) -> Nil {
+/// Brutally kill a node process. Its links die with it (they monitor their
+/// endpoints), so every neighbor observes ordinary link failures.
+pub fn crash_node(net: Network, n: NodeId) -> Network {
   case dict.get(net.nodes, n) {
     Ok(h) -> process.kill(h.pid)
     Error(_) -> Nil
   }
+  let gone = graph.incident(net.graph, n)
+  Network(
+    graph: Graph(
+      nodes: list.filter(net.graph.nodes, fn(m) { m != n }),
+      edges: list.filter(net.graph.edges, fn(e) { e.u != n && e.v != n }),
+    ),
+    nodes: dict.delete(net.nodes, n),
+    links: dict.drop(
+      net.links,
+      list.map(gone, fn(e) { graph.edge_id(e.u, e.v) }),
+    ),
+  )
 }
