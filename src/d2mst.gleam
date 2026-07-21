@@ -2,8 +2,8 @@
 //// construction, and print the resulting tree next to the Kruskal reference.
 
 import d2mst/graph.{Edge, Graph}
-import d2mst/logger
-import d2mst/network
+import engine/logger
+import engine/network
 import gleam/int
 import gleam/io
 import gleam/list

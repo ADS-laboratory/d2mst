@@ -3,9 +3,9 @@
 //// simulator to apply topology events.
 
 import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId, Graph}
-import d2mst/link
-import d2mst/logger
-import d2mst/node_actor
+import engine/link
+import engine/logger
+import engine/node_actor
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list

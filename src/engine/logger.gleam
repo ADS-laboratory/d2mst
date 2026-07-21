@@ -8,7 +8,7 @@
 
 import d2mst/fragment
 import d2mst/graph.{type EdgeId, type NodeId}
-import d2mst/node.{type NodeState}
+import engine/node.{type NodeState}
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/int

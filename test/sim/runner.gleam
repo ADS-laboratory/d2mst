@@ -4,8 +4,8 @@
 //// protocol runs reproducible and debuggable step by step.
 
 import d2mst/graph.{type Graph, type NodeId}
-import d2mst/logger
-import d2mst/node
+import engine/logger
+import engine/node
 import gleam/dict.{type Dict}
 import gleam/list
 

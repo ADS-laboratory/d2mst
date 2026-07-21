@@ -3,8 +3,8 @@
 //// unique MST computed by the Kruskal oracle.
 
 import d2mst/graph.{type Graph, Edge, Graph}
-import d2mst/logger
-import d2mst/network
+import engine/logger
+import engine/network
 import gleam/dict
 import gleam/erlang/process
 import gleam/list

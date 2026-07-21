@@ -2,7 +2,7 @@
 //// MST of the graph (Kruskal reference) and the rooted-tree invariants.
 
 import d2mst/graph.{type Graph}
-import d2mst/logger
+import engine/logger
 import gleam/bool
 import gleam/int
 import gleam/list
