@@ -3,6 +3,7 @@
 //// process-free runner.
 
 import d2mst/graph.{Edge, EdgeId, Graph}
+import d2mst/logger
 import d2mst/message
 import d2mst/node
 import gleam/list
@@ -15,7 +16,7 @@ pub fn wakeup_connects_on_min_edge_test() {
   let st = node.init(0, [Edge(0, 1, 5), Edge(0, 2, 3)])
   let #(st, effects) = node.handle(st, node.Wakeup)
   assert effects == [node.Send(EdgeId(0, 2), message.Connect(0))]
-  assert node.summarise(st).tree_edges == [EdgeId(0, 2)]
+  assert logger.summarise(st).tree_edges == [EdgeId(0, 2)]
   // A second wakeup is a no-op.
   let #(_, effects) = node.handle(st, node.Wakeup)
   assert effects == []
@@ -25,7 +26,7 @@ pub fn isolated_node_halts_test() {
   let st = node.init(7, [])
   let #(st, effects) = node.handle(st, node.Wakeup)
   assert effects == []
-  let summary = node.summarise(st)
+  let summary = logger.summarise(st)
   assert summary.halted
   assert summary.parent == None
 }

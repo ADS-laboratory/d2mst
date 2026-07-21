@@ -4,6 +4,7 @@
 //// protocol runs reproducible and debuggable step by step.
 
 import d2mst/graph.{type Graph, type NodeId}
+import d2mst/logger
 import d2mst/node
 import gleam/dict.{type Dict}
 import gleam/list
@@ -17,9 +18,9 @@ pub fn run(g: Graph) -> Dict(NodeId, node.State) {
   loop(states, wakeups)
 }
 
-pub fn summaries(states: Dict(NodeId, node.State)) -> List(node.Summary) {
+pub fn summaries(states: Dict(NodeId, node.State)) -> List(logger.Summary) {
   dict.to_list(states)
-  |> list.map(fn(p) { node.summarise(p.1) })
+  |> list.map(fn(p) { logger.summarise(p.1) })
 }
 
 fn loop(

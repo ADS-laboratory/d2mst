@@ -2,14 +2,14 @@
 //// MST of the graph (Kruskal reference) and the rooted-tree invariants.
 
 import d2mst/graph.{type Graph}
-import d2mst/node
+import d2mst/logger
 import gleam/bool
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/set
 
-pub fn check(g: Graph, summaries: List(node.Summary)) -> Result(Nil, String) {
+pub fn check(g: Graph, summaries: List(logger.Summary)) -> Result(Nil, String) {
   let all_halted = list.all(summaries, fn(s) { s.halted })
   let branch =
     list.fold(summaries, set.new(), fn(acc, s) {

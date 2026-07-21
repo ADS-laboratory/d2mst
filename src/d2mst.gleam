@@ -3,12 +3,10 @@
 
 import d2mst/graph.{Edge, Graph}
 import d2mst/logger
-import d2mst/monitor
 import d2mst/network
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{Some}
 import gleam/order
 import gleam/set
 import gleam/string
@@ -30,17 +28,17 @@ pub fn main() {
     ])
 
   let lg = logger.start()
-  let net = network.start(g, Some(lg))
+  let net = network.start(g, lg)
   network.wake_all(net)
 
-  case monitor.await_halt(net, 100, 20) {
+  case logger.await_halt(lg, g.nodes, 100, 20) {
     Error(_) -> io.println("did not converge in time")
     Ok(summaries) -> {
       io.println("-- converged --")
-      io.println(monitor.format(summaries))
+      io.println(logger.format(summaries))
       io.println(
         "tree edges:      "
-        <> edges_to_string(monitor.tree_edges(summaries) |> set.to_list),
+        <> edges_to_string(logger.tree_edges(summaries) |> set.to_list),
       )
       io.println(
         "kruskal (oracle): "
@@ -48,7 +46,7 @@ pub fn main() {
           graph.kruskal(g) |> list.map(fn(e) { graph.edge_id(e.u, e.v) }),
         ),
       )
-      io.println(logger.format_counts(logger.counts(lg)))
+      io.println(logger.format_counts(logger.counts(logger.history(lg, 1000))))
     }
   }
 }

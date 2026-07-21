@@ -5,28 +5,27 @@
 import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId, Graph}
 import d2mst/link
 import d2mst/logger
-import d2mst/node
+import d2mst/node_actor
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
-import gleam/option.{type Option}
 
 pub type Network {
   Network(
     graph: Graph,
-    nodes: Dict(NodeId, node.Handle),
+    nodes: Dict(NodeId, node_actor.Handle),
     links: Dict(EdgeId, link.Handle),
   )
 }
 
-fn endpoint(h: node.Handle) -> link.Endpoint {
+fn endpoint(h: node_actor.Handle) -> link.Endpoint {
   link.Endpoint(pid: h.pid, delivery: h.delivery)
 }
 
-pub fn start(g: Graph, lg: Option(Subject(logger.Msg))) -> Network {
+pub fn start(g: Graph, lg: Subject(logger.Msg)) -> Network {
   let nodes =
     list.fold(g.nodes, dict.new(), fn(d, n) {
-      dict.insert(d, n, node.start(n, graph.incident(g, n), lg))
+      dict.insert(d, n, node_actor.start(n, graph.incident(g, n), lg))
     })
   let links =
     list.fold(g.edges, dict.new(), fn(d, e) {
@@ -47,7 +46,7 @@ pub fn start(g: Graph, lg: Option(Subject(logger.Msg))) -> Network {
         let assert Ok(l) = dict.get(links, eid)
         dict.insert(d, eid, l)
       })
-    process.send(h.control, node.Attach(mine))
+    process.send(h.control, node_actor.Attach(mine))
   })
   Network(graph: g, nodes:, links:)
 }
@@ -55,7 +54,7 @@ pub fn start(g: Graph, lg: Option(Subject(logger.Msg))) -> Network {
 /// Wake every node. GHS allows any subset of nodes to start spontaneously.
 pub fn wake_all(net: Network) -> Nil {
   dict.to_list(net.nodes)
-  |> list.each(fn(p) { process.send({ p.1 }.control, node.Wake) })
+  |> list.each(fn(p) { process.send({ p.1 }.control, node_actor.Wake) })
 }
 
 // --- topology events --------------------------------------------------------
@@ -91,8 +90,8 @@ pub fn add_link(net: Network, e: Edge) -> Network {
   let assert Ok(hu) = dict.get(net.nodes, e.u)
   let assert Ok(hv) = dict.get(net.nodes, e.v)
   let l = link.start(e, endpoint(hu), endpoint(hv))
-  process.send(hu.control, node.AttachEdge(e, l))
-  process.send(hv.control, node.AttachEdge(e, l))
+  process.send(hu.control, node_actor.AttachEdge(e, l))
+  process.send(hv.control, node_actor.AttachEdge(e, l))
   Network(
     ..net,
     graph: Graph(..net.graph, edges: [e, ..net.graph.edges]),
