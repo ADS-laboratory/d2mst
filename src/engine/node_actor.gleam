@@ -8,9 +8,9 @@
 
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message
+import d2mst/node.{type Event, type State, LinkDown, Receive, Send, Wakeup}
 import engine/link
 import engine/logger
-import engine/node.{type Event, type State, LinkDown, Receive, Send, Wakeup}
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/list

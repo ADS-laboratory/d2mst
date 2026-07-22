@@ -4,8 +4,8 @@
 
 import d2mst/graph.{Edge, EdgeId, Graph}
 import d2mst/message
+import d2mst/node
 import engine/logger
-import engine/node
 import gleam/list
 import gleam/option.{None, Some}
 import sim/generator
