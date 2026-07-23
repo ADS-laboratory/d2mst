@@ -29,8 +29,8 @@ pub type NodeState {
 }
 
 pub type EdgeStatus {
-  Basic
-  Branch
+  Undecided
+  Selected
   Rejected
 }
 
@@ -78,7 +78,7 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
       dict.insert(
         d,
         graph.edge_id(e.u, e.v),
-        EdgeInfo(peer:, edge: e, status: Basic),
+        EdgeInfo(peer:, edge: e, status: Undecided),
       )
     })
   State(
@@ -110,7 +110,7 @@ pub fn add_edge(state: State, edge: Edge) -> State {
     edges: dict.insert(
       state.edges,
       graph.edge_id(edge.u, edge.v),
-      EdgeInfo(peer:, edge:, status: Basic),
+      EdgeInfo(peer:, edge:, status: Undecided),
     ),
   )
 }
@@ -181,7 +181,7 @@ fn wakeup(state: State) -> #(State, List(Effect)) {
         // No edges at all: this node is a complete (and completed) MST.
         None -> #(State(..state, ns: Found, halted: True), [])
         Some(eid) -> {
-          let state = set_status(state, eid, Branch)
+          let state = set_status(state, eid, Selected)
           let state = State(..state, ns: Found, level: 0, find_count: 0)
           #(state, [Send(eid, message.Connect(0))])
         }
@@ -196,7 +196,7 @@ fn on_connect(state: State, j: EdgeId, l: Int) -> #(State, List(Effect)) {
   case l < state.level {
     // Absorb the lower-level fragment into ours.
     True -> {
-      let state = set_status(state, j, Branch)
+      let state = set_status(state, j, Selected)
       let find = state.ns == Find
       let state = case find {
         True -> State(..state, find_count: state.find_count + 1)
@@ -211,9 +211,9 @@ fn on_connect(state: State, j: EdgeId, l: Int) -> #(State, List(Effect)) {
     }
     False ->
       case info.status {
-        // Same/higher level over a basic edge: wait until our fragment
-        // catches up or the edge becomes a branch.
-        Basic -> #(defer(state, j, message.Connect(l)), woke)
+        // Same/higher level over an undecided edge: wait until our fragment
+        // catches up or the edge becomes selected.
+        Undecided -> #(defer(state, j, message.Connect(l)), woke)
         // Both fragments chose this edge: merge, j becomes the new core.
         _ -> #(
           state,
@@ -252,7 +252,7 @@ fn on_initiate(
     dict.to_list(state.edges)
     |> list.filter_map(fn(p) {
       let #(eid, info) = p
-      case eid != j && info.status == Branch {
+      case eid != j && info.status == Selected {
         True -> Ok(eid)
         False -> Error(Nil)
       }
@@ -269,9 +269,9 @@ fn on_initiate(
   }
 }
 
-/// Probe the minimum-weight basic edge, or report if none is left.
+/// Probe the minimum-weight undecided edge, or report if none is left.
 fn start_test(state: State) -> #(State, List(Effect)) {
-  case min_edge(state, fn(i) { i.status == Basic }) {
+  case min_edge(state, fn(i) { i.status == Undecided }) {
     Some(eid) -> {
       let state = State(..state, test_edge: Some(eid))
       #(state, [Send(eid, message.Test(state.level, state.fragment))])
@@ -299,7 +299,7 @@ fn on_test(
         True -> {
           let assert Ok(info) = dict.get(state.edges, j)
           let state = case info.status {
-            Basic -> set_status(state, j, Rejected)
+            Undecided -> set_status(state, j, Rejected)
             _ -> state
           }
           case state.test_edge == Some(j) {
@@ -329,7 +329,7 @@ fn on_accept(state: State, j: EdgeId) -> #(State, List(Effect)) {
 fn on_reject(state: State, j: EdgeId) -> #(State, List(Effect)) {
   let assert Ok(info) = dict.get(state.edges, j)
   let state = case info.status {
-    Basic -> set_status(state, j, Rejected)
+    Undecided -> set_status(state, j, Rejected)
     _ -> state
   }
   start_test(state)
@@ -388,9 +388,9 @@ fn change_root(state: State) -> #(State, List(Effect)) {
   let assert Some(b) = state.best_edge
   let assert Ok(info) = dict.get(state.edges, b)
   case info.status {
-    Branch -> #(state, [Send(b, message.ChangeRoot)])
+    Selected -> #(state, [Send(b, message.ChangeRoot)])
     _ -> {
-      let state = set_status(state, b, Branch)
+      let state = set_status(state, b, Selected)
       #(state, [Send(b, message.Connect(state.level))])
     }
   }
@@ -456,7 +456,7 @@ pub fn branch_edges_except(state: State, except: Option(EdgeId)) -> List(EdgeId)
   dict.to_list(state.edges)
   |> list.filter_map(fn(p) {
     let #(eid, info) = p
-    case info.status == Branch && Some(eid) != except {
+    case info.status == Selected && Some(eid) != except {
       True -> Ok(eid)
       False -> Error(Nil)
     }
