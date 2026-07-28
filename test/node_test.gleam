@@ -15,7 +15,7 @@ import sim/runner
 pub fn wakeup_connects_on_min_edge_test() {
   let st = node.init(0, [Edge(0, 1, 5), Edge(0, 2, 3)])
   let #(st, effects) = node.handle(st, node.Wakeup)
-  assert effects == [node.Send(EdgeId(0, 2), message.Connect(0))]
+  assert effects == [node.Send(EdgeId(0, 2), message.Merge(0))]
   assert logger.summarise(st).tree_edges == [EdgeId(0, 2)]
   // A second wakeup is a no-op.
   let #(_, effects) = node.handle(st, node.Wakeup)
@@ -32,12 +32,12 @@ pub fn isolated_node_halts_test() {
 }
 
 pub fn connect_from_lower_level_is_deferred_on_basic_edge_test() {
-  // Node 0 wakes and chooses edge (0,2); a Connect(0) arriving on the basic
+  // Node 0 wakes and chooses edge (0,2); a Merge(0) arriving on the basic
   // edge (0,1) at the same level must wait, not be answered.
   let st = node.init(0, [Edge(0, 1, 5), Edge(0, 2, 3)])
   let #(st, _) = node.handle(st, node.Wakeup)
   let #(_, effects) =
-    node.handle(st, node.Receive(EdgeId(0, 1), message.Connect(0)))
+    node.handle(st, node.Receive(EdgeId(0, 1), message.Merge(0)))
   assert effects == []
 }
 

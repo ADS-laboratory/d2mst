@@ -10,8 +10,8 @@
 ////   - when the core detects termination it broadcasts `Halt` down the tree
 ////     so every node (and any observer) can observe completion.
 ////
-//// Messages that GHS must delay (Connect from a lower level not yet
-//// mergeable, Test from a higher level, Report while still finding) are kept
+//// Messages that GHS must delay (Merge from a lower level not yet
+//// mergeable, Test from a higher level, Notify while still finding) are kept
 //// in `pending` and re-examined after every processed event, which is
 //// equivalent to the paper's "place message at end of queue".
 
@@ -24,7 +24,7 @@ import gleam/option.{type Option, None, Some}
 
 pub type NodeState {
   Sleeping
-  Find
+  Searching
   Found
 }
 
@@ -161,12 +161,12 @@ fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
         False -> #(state, [])
         True ->
           case msg {
-            message.Connect(l) -> on_connect(state, on, l)
+            message.Merge(l) -> on_connect(state, on, l)
             message.Initiate(l, f, find) -> on_initiate(state, on, l, f, find)
             message.Test(l, f) -> on_test(state, on, l, f)
             message.Accept -> on_accept(state, on)
             message.Reject -> on_reject(state, on)
-            message.Report(w) -> on_report(state, on, w)
+            message.Notify(w) -> on_notification(state, on, w)
             message.ChangeRoot -> change_root(state)
             message.Halt -> on_halt(state, on)
           }
@@ -183,7 +183,7 @@ fn wakeup(state: State) -> #(State, List(Effect)) {
         Some(eid) -> {
           let state = set_status(state, eid, Selected)
           let state = State(..state, ns: Found, level: 0, find_count: 0)
-          #(state, [Send(eid, message.Connect(0))])
+          #(state, [Send(eid, message.Merge(0))])
         }
       }
     _ -> #(state, [])
@@ -197,7 +197,7 @@ fn on_connect(state: State, j: EdgeId, l: Int) -> #(State, List(Effect)) {
     // Absorb the lower-level fragment into ours.
     True -> {
       let state = set_status(state, j, Selected)
-      let find = state.ns == Find
+      let find = state.ns == Searching
       let state = case find {
         True -> State(..state, find_count: state.find_count + 1)
         False -> state
@@ -213,7 +213,7 @@ fn on_connect(state: State, j: EdgeId, l: Int) -> #(State, List(Effect)) {
       case info.status {
         // Same/higher level over an undecided edge: wait until our fragment
         // catches up or the edge becomes selected.
-        Undecided -> #(defer(state, j, message.Connect(l)), woke)
+        Undecided -> #(defer(state, j, message.Merge(l)), woke)
         // Both fragments chose this edge: merge, j becomes the new core.
         _ -> #(
           state,
@@ -233,7 +233,7 @@ fn on_initiate(
   find: Bool,
 ) -> #(State, List(Effect)) {
   let ns = case find {
-    True -> Find
+    True -> Searching
     False -> Found
   }
   let state =
@@ -342,7 +342,7 @@ fn report(state: State) -> #(State, List(Effect)) {
     True -> {
       let state = State(..state, ns: Found)
       case state.in_branch {
-        Some(j) -> #(state, [Send(j, message.Report(state.best_wt))])
+        Some(j) -> #(state, [Send(j, message.Notify(state.best_wt))])
         None -> #(state, [])
       }
     }
@@ -350,13 +350,13 @@ fn report(state: State) -> #(State, List(Effect)) {
   }
 }
 
-fn on_report(
+fn on_notification(
   state: State,
   j: EdgeId,
   w: Option(Edge),
 ) -> #(State, List(Effect)) {
   case Some(j) != state.in_branch {
-    // Report from a child.
+    // Notify from a child.
     True -> {
       let state = State(..state, find_count: state.find_count - 1)
       let state = case opt_less(w, state.best_wt) {
@@ -365,10 +365,10 @@ fn on_report(
       }
       report(state)
     }
-    // Report from the other side of the core.
+    // Notify from the other side of the core.
     False ->
       case state.ns {
-        Find -> #(defer(state, j, message.Report(w)), [])
+        Searching -> #(defer(state, j, message.Notify(w)), [])
         _ ->
           case opt_less(state.best_wt, w) {
             // The fragment MOE is on our side: redirect the core here.
@@ -391,7 +391,7 @@ fn change_root(state: State) -> #(State, List(Effect)) {
     Selected -> #(state, [Send(b, message.ChangeRoot)])
     _ -> {
       let state = set_status(state, b, Selected)
-      #(state, [Send(b, message.Connect(state.level))])
+      #(state, [Send(b, message.Merge(state.level))])
     }
   }
 }
@@ -450,9 +450,12 @@ fn min_edge(state: State, keep: fn(EdgeInfo) -> Bool) -> Option(EdgeId) {
 }
 
 /// Exposed for `logger.summarise`: the branch edges a node currently knows
-/// about, excluding `except` (the edge a Halt/Report arrived on, so it is
+/// about, excluding `except` (the edge a Halt/Notify arrived on, so it is
 /// not echoed back where it came from).
-pub fn branch_edges_except(state: State, except: Option(EdgeId)) -> List(EdgeId) {
+pub fn branch_edges_except(
+  state: State,
+  except: Option(EdgeId),
+) -> List(EdgeId) {
   dict.to_list(state.edges)
   |> list.filter_map(fn(p) {
     let #(eid, info) = p
