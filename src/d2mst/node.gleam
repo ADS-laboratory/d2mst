@@ -38,6 +38,7 @@ pub type EdgeInfo {
   EdgeInfo(peer: NodeId, edge: Edge, status: EdgeStatus)
 }
 
+/// The node state machine.
 pub type State {
   State(
     id: NodeId,
@@ -45,10 +46,13 @@ pub type State {
     ns: NodeState,
     fragment: FragmentId,
     level: Int,
+    // rename to parent_edge?
     in_branch: Option(EdgeId),
+    // rename to edge_to_best? (is the local edge towards the best outgoing weight found so far)
     best_edge: Option(EdgeId),
     best_wt: Option(Edge),
     test_edge: Option(EdgeId),
+    // rename to child_countdown? (is the number of children that have not yet reported)
     find_count: Int,
     halted: Bool,
     pending: List(#(EdgeId, message.Msg)),
@@ -225,6 +229,8 @@ fn on_connect(state: State, j: EdgeId, l: Int) -> #(State, List(Effect)) {
   }
 }
 
+// `Initiate` is a broadcast down the fragment tree that sets the fragment id and level,
+// and tells each node whether it should start searching for the MOE or not.
 fn on_initiate(
   state: State,
   j: EdgeId,
@@ -283,19 +289,23 @@ fn start_test(state: State) -> #(State, List(Effect)) {
   }
 }
 
+// An neighbour is testing us: if it is in a different fragment we are a candidate for the
+// MOE, otherwise we are an internal edge and must not be chosen.
 fn on_test(
   state: State,
   j: EdgeId,
-  l: Int,
+  level: Int,
   f: FragmentId,
 ) -> #(State, List(Effect)) {
   let #(state, woke) = wakeup(state)
-  case l > state.level {
+  case level > state.level {
     // The asker is ahead of us; answering now could wrongly Accept.
-    True -> #(defer(state, j, message.Test(l, f)), woke)
+    True -> #(defer(state, j, message.Test(level, f)), woke)
     False ->
       case f == state.fragment {
+        // Different fragments: the edge is a candidate for the MOE.
         False -> #(state, list.append(woke, [Send(j, message.Accept)]))
+        // Same fragment: the edge is internal, not a candidate for the MOE.
         True -> {
           let assert Ok(info) = dict.get(state.edges, j)
           let state = case info.status {
@@ -316,6 +326,9 @@ fn on_test(
   }
 }
 
+// The other side accepted our test: the edge is a candidate for the MOE if it is the best
+// one we have seen so far. When all children have reported and our own probe finished, we
+// report the best outgoing weight found in our subtree towards the core.
 fn on_accept(state: State, j: EdgeId) -> #(State, List(Effect)) {
   let assert Ok(info) = dict.get(state.edges, j)
   let state = State(..state, test_edge: None)
@@ -326,6 +339,8 @@ fn on_accept(state: State, j: EdgeId) -> #(State, List(Effect)) {
   report(state)
 }
 
+// The other side rejected our test: the edge is internal, not a candidate for the MOE.
+// We set its status to Rejected and continue probing for the MOE.
 fn on_reject(state: State, j: EdgeId) -> #(State, List(Effect)) {
   let assert Ok(info) = dict.get(state.edges, j)
   let state = case info.status {
@@ -350,6 +365,7 @@ fn report(state: State) -> #(State, List(Effect)) {
   }
 }
 
+// A child reported its best outgoing weight.
 fn on_notification(
   state: State,
   j: EdgeId,
@@ -419,6 +435,8 @@ fn on_halt(state: State, j: EdgeId) -> #(State, List(Effect)) {
 
 // --- helpers ---------------------------------------------------------------
 
+// Put a message in the pending queue to be retried later. The message is
+// not sent now, so the caller must not send it either.
 fn defer(state: State, on: EdgeId, msg: message.Msg) -> State {
   State(..state, pending: [#(on, msg), ..state.pending])
 }
