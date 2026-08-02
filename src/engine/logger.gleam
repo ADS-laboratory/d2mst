@@ -166,7 +166,9 @@ pub fn await_halt(
     0 -> Error(Nil)
     _ -> {
       let s = reconstruct(history(lg, 1000), ids)
-      case list.length(s) == list.length(ids) && list.all(s, fn(r) { r.halted }) {
+      case
+        list.length(s) == list.length(ids) && list.all(s, fn(r) { r.halted })
+      {
         True -> Ok(s)
         False -> {
           process.sleep(interval_ms)

@@ -10,11 +10,8 @@
 //// dies. This cascade is what reduces node crashes to edge failures: a
 //// crashed node takes all its links down, and every neighbor observes
 //// ordinary link failures.
-////
-//// Later tiers can add chaos injection here (message drop/delay/reorder on
-//// a *living* link) without touching the nodes.
 
-import d2mst/graph.{type Edge, type EdgeId, type NodeId}
+import d2mst/graph.{type Edge, type NodeId}
 import d2mst/message.{type Delivery, Delivery}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/otp/actor
@@ -37,7 +34,7 @@ pub type Msg {
 }
 
 type State {
-  State(edge: Edge, id: EdgeId, u: Endpoint, v: Endpoint)
+  State(edge: Edge, u: Endpoint, v: Endpoint)
 }
 
 /// `u` must be the endpoint of node `edge.u`, and `v` the one of node
@@ -51,7 +48,7 @@ pub fn start(edge: Edge, u: Endpoint, v: Endpoint) -> Handle {
         process.new_selector()
         |> process.select(subject)
         |> process.select_monitors(fn(_) { EndpointDown })
-      actor.initialised(State(edge:, id: graph.edge_id(edge.u, edge.v), u:, v:))
+      actor.initialised(State(edge:, u:, v:))
       |> actor.selecting(selector)
       |> actor.returning(subject)
       |> Ok
@@ -71,7 +68,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         True -> state.v.delivery
         False -> state.u.delivery
       }
-      process.send(target, Delivery(state.id, payload))
+      let edge_id = graph.edge_id(state.edge.u, state.edge.v)
+      process.send(target, Delivery(edge_id, payload))
       actor.continue(state)
     }
     // A channel with one end is no channel: die, so the surviving endpoint

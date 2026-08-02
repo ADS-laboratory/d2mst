@@ -2,7 +2,7 @@
 //// one link actor per edge. This is the API used by the tests and the
 //// simulator to apply topology events.
 
-import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId, Graph}
+import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId}
 import engine/link
 import engine/logger
 import engine/node_actor
@@ -15,6 +15,9 @@ pub type Network {
     graph: Graph,
     nodes: Dict(NodeId, node_actor.Handle),
     links: Dict(EdgeId, link.Handle),
+    /// Kept so topology events can wire newly spawned nodes to the same
+    /// observer without the caller having to pass it around again.
+    logger: Subject(logger.Msg),
   )
 }
 
@@ -48,7 +51,7 @@ pub fn start(g: Graph, lg: Subject(logger.Msg)) -> Network {
       })
     process.send(h.control, node_actor.Attach(mine))
   })
-  Network(graph: g, nodes:, links:)
+  Network(graph: g, nodes:, links:, logger: lg)
 }
 
 /// Wake every node. GHS allows any subset of nodes to start spontaneously.
@@ -59,9 +62,64 @@ pub fn wake_all(net: Network) -> Nil {
 
 // --- topology events --------------------------------------------------------
 //
-// These mutate the running system (kill/spawn processes) and return the
-// Network value describing the new topology, so tests can keep checking
-// against the current graph.
+// The four events the network can undergo: a node joins or dies, a link is
+// added or fails. They mutate the running system (kill/spawn processes) and
+// return the Network value describing the new topology, so tests can keep
+// checking against the current graph. `sim/runner` mirrors this API on the
+// process-free runtime.
+
+/// Add an isolated node to the running network. It starts with no incident
+/// edges; `add_link` is what connects it to the rest of the network.
+pub fn add_node(net: Network, n: NodeId) -> Network {
+  case dict.has_key(net.nodes, n) {
+    True -> net
+    False -> {
+      let h = node_actor.start(n, [], net.logger)
+      process.send(h.control, node_actor.Attach(dict.new()))
+      Network(
+        ..net,
+        graph: graph.add_node(net.graph, n),
+        nodes: dict.insert(net.nodes, n, h),
+      )
+    }
+  }
+}
+
+/// Kill a node process. Its links die with it (they monitor
+/// their endpoints), so every neighbor observes ordinary link failures.
+pub fn crash_node(net: Network, n: NodeId) -> Network {
+  case dict.get(net.nodes, n) {
+    Ok(h) -> process.kill(h.pid)
+    Error(_) -> Nil
+  }
+  let gone = graph.incident(net.graph, n)
+  Network(
+    ..net,
+    graph: graph.remove_node(net.graph, n),
+    nodes: dict.delete(net.nodes, n),
+    links: dict.drop(
+      net.links,
+      list.map(gone, fn(e) { graph.edge_id(e.u, e.v) }),
+    ),
+  )
+}
+
+/// Add an edge to the running network: spawn its link and introduce it to
+/// both endpoint nodes. A previously failed edge that comes back is simply
+/// added again — at the protocol level it is a new edge. Both endpoints must
+/// already be in the network.
+pub fn add_link(net: Network, e: Edge) -> Network {
+  let assert Ok(hu) = dict.get(net.nodes, e.u)
+  let assert Ok(hv) = dict.get(net.nodes, e.v)
+  let l = link.start(e, endpoint(hu), endpoint(hv))
+  process.send(hu.control, node_actor.AttachEdge(e, l))
+  process.send(hv.control, node_actor.AttachEdge(e, l))
+  Network(
+    ..net,
+    graph: graph.add_edge(net.graph, e),
+    links: dict.insert(net.links, graph.edge_id(e.u, e.v), l),
+  )
+}
 
 /// Delete an edge: kill its link process. Both endpoint nodes observe the
 /// death via their monitors as a `LinkDown` event.
@@ -73,49 +131,7 @@ pub fn fail_link(net: Network, u: NodeId, v: NodeId) -> Network {
   }
   Network(
     ..net,
-    graph: Graph(
-      ..net.graph,
-      edges: list.filter(net.graph.edges, fn(e) {
-        graph.edge_id(e.u, e.v) != eid
-      }),
-    ),
+    graph: graph.remove_edge(net.graph, eid),
     links: dict.delete(net.links, eid),
-  )
-}
-
-/// Add an edge to the running network: spawn its link and introduce it to
-/// both endpoint nodes. A previously failed edge that comes back is simply
-/// added again — at the protocol level it is a new edge.
-pub fn add_link(net: Network, e: Edge) -> Network {
-  let assert Ok(hu) = dict.get(net.nodes, e.u)
-  let assert Ok(hv) = dict.get(net.nodes, e.v)
-  let l = link.start(e, endpoint(hu), endpoint(hv))
-  process.send(hu.control, node_actor.AttachEdge(e, l))
-  process.send(hv.control, node_actor.AttachEdge(e, l))
-  Network(
-    ..net,
-    graph: Graph(..net.graph, edges: [e, ..net.graph.edges]),
-    links: dict.insert(net.links, graph.edge_id(e.u, e.v), l),
-  )
-}
-
-/// Brutally kill a node process. Its links die with it (they monitor their
-/// endpoints), so every neighbor observes ordinary link failures.
-pub fn crash_node(net: Network, n: NodeId) -> Network {
-  case dict.get(net.nodes, n) {
-    Ok(h) -> process.kill(h.pid)
-    Error(_) -> Nil
-  }
-  let gone = graph.incident(net.graph, n)
-  Network(
-    graph: Graph(
-      nodes: list.filter(net.graph.nodes, fn(m) { m != n }),
-      edges: list.filter(net.graph.edges, fn(e) { e.u != n && e.v != n }),
-    ),
-    nodes: dict.delete(net.nodes, n),
-    links: dict.drop(
-      net.links,
-      list.map(gone, fn(e) { graph.edge_id(e.u, e.v) }),
-    ),
   )
 }

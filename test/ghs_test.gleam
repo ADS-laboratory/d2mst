@@ -151,6 +151,24 @@ pub fn add_link_test() {
   assert oracle.check(net.graph, summaries) == Ok(Nil)
 }
 
+pub fn add_node_test() {
+  let g = Graph(nodes: [0, 1], edges: [Edge(0, 1, 1)])
+  let lg = logger.start()
+  let net = network.start(g, lg)
+  network.wake_all(net)
+  let assert Ok(_) = logger.await_halt(lg, net.graph.nodes, 200, 10)
+  // A joining node is spawned isolated and only becomes reachable once a
+  // link is added; its process must be alive and wired to the same logger.
+  let net = network.add_node(net, 2)
+  let net = network.add_link(net, Edge(1, 2, 3))
+  process.sleep(50)
+  let assert Ok(h) = dict.get(net.nodes, 2)
+  assert process.is_alive(h.pid)
+  assert dict.has_key(net.links, graph.edge_id(1, 2))
+  assert net.graph.nodes == [2, 0, 1]
+  assert list.length(logger.reconstruct(logger.history(lg, 1000), [2])) == 1
+}
+
 pub fn message_complexity_is_recorded_test() {
   // The logger (interface component) must observe the traffic of a run.
   let g = generator.connected(7, 12, 30)

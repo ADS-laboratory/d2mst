@@ -3,12 +3,13 @@
 //// The only part of the node that touches processes: it feeds received
 //// messages into `node.handle` and performs the resulting effects by
 //// sending to link actors, reporting every send and every state change to
-//// the logger. The GHS logic itself lives in `node.gleam` as a pure state
-//// machine and knows nothing about any of this.
+//// the logger.
 
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message
-import d2mst/node.{type Event, type State, LinkDown, Receive, Send, Wakeup}
+import d2mst/node.{
+  type Event, type State, LinkDown, LinkUp, Receive, Send, Wakeup,
+}
 import engine/link
 import engine/logger
 import gleam/dict.{type Dict}
@@ -20,7 +21,7 @@ pub type CtlMsg {
   /// Wire the node to its link actors. Sent once by the network before any
   /// wakeup. The node monitors every link process.
   Attach(links: Dict(EdgeId, link.Handle))
-  /// A single new link was added to the running network (tier 3).
+  /// A single new link was added to the running network.
   AttachEdge(edge: Edge, link: link.Handle)
   Wake
   FromLink(on: EdgeId, msg: message.Msg)
@@ -38,7 +39,7 @@ pub type Handle {
 
 type Shell {
   Shell(
-    core: State,
+    state: State,
     links: Dict(EdgeId, link.Handle),
     logger: Subject(logger.Msg),
   )
@@ -78,16 +79,16 @@ fn shell_handle(shell: Shell, msg: CtlMsg) -> actor.Next(Shell, CtlMsg) {
     Attach(links) -> {
       dict.to_list(links)
       |> list.each(fn(p) { process.monitor({ p.1 }.pid) })
-      actor.continue(Shell(..shell, links:))
+      report(Shell(..shell, links:))
     }
     AttachEdge(edge, l) -> {
       process.monitor(l.pid)
-      actor.continue(
+      run(
         Shell(
           ..shell,
-          core: node.add_edge(shell.core, edge),
           links: dict.insert(shell.links, graph.edge_id(edge.u, edge.v), l),
         ),
+        LinkUp(edge),
       )
     }
     Wake -> run(shell, Wakeup)
@@ -95,7 +96,9 @@ fn shell_handle(shell: Shell, msg: CtlMsg) -> actor.Next(Shell, CtlMsg) {
     MonitorDown(down) ->
       case down {
         process.ProcessDown(pid: pid, ..) ->
-          case dict.to_list(shell.links) |> list.find(fn(p) { { p.1 }.pid == pid }) {
+          case
+            dict.to_list(shell.links) |> list.find(fn(p) { { p.1 }.pid == pid })
+          {
             Ok(#(eid, _)) ->
               run(
                 Shell(..shell, links: dict.delete(shell.links, eid)),
@@ -109,18 +112,27 @@ fn shell_handle(shell: Shell, msg: CtlMsg) -> actor.Next(Shell, CtlMsg) {
   }
 }
 
+// Dispatch a node event to the protocol
 fn run(shell: Shell, event: Event) -> actor.Next(Shell, CtlMsg) {
-  let #(core, effects) = node.handle(shell.core, event)
+  let #(state, effects) = node.handle(shell.state, event)
   list.each(effects, fn(effect) {
     let Send(on, m) = effect
     case dict.get(shell.links, on) {
       Ok(l) -> {
-        process.send(l.subject, link.Transmit(core.id, m))
-        process.send(shell.logger, logger.Sent(core.id))
+        process.send(l.subject, link.Transmit(state.id, m))
+        process.send(shell.logger, logger.Sent(state.id))
       }
       Error(_) -> Nil
     }
   })
-  process.send(shell.logger, logger.StateChanged(logger.summarise(core)))
-  actor.continue(Shell(..shell, core:))
+  report(Shell(..shell, state:))
+}
+
+/// Publish the node's current state to the observer without running the
+/// protocol. Attaching links is a topology change, not a protocol event: the
+/// node sends nothing, but the logger must still learn that the node exists
+/// and which edges it now has.
+fn report(shell: Shell) -> actor.Next(Shell, CtlMsg) {
+  process.send(shell.logger, logger.StateChanged(logger.summarise(shell.state)))
+  actor.continue(shell)
 }

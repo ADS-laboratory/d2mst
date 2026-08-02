@@ -43,8 +43,8 @@ pub fn connect_from_lower_level_is_deferred_on_basic_edge_test() {
 
 pub fn two_node_merge_test() {
   let g = Graph(nodes: [0, 1], edges: [Edge(0, 1, 4)])
-  let states = runner.run(g)
-  let summaries = runner.summaries(states)
+  let sim = runner.converge(g)
+  let summaries = runner.summaries(sim)
   assert oracle.check(g, summaries) == Ok(Nil)
   // The smaller core endpoint is the root.
   let assert Ok(s0) = list.find(summaries, fn(s) { s.id == 0 })
@@ -60,8 +60,8 @@ pub fn triangle_test() {
       Edge(1, 2, 2),
       Edge(0, 2, 3),
     ])
-  let states = runner.run(g)
-  assert oracle.check(g, runner.summaries(states)) == Ok(Nil)
+  let sim = runner.converge(g)
+  assert oracle.check(g, runner.summaries(sim)) == Ok(Nil)
 }
 
 pub fn line_graph_test() {
@@ -72,8 +72,8 @@ pub fn line_graph_test() {
       Edge(2, 3, 7),
       Edge(3, 4, 1),
     ])
-  let states = runner.run(g)
-  assert oracle.check(g, runner.summaries(states)) == Ok(Nil)
+  let sim = runner.converge(g)
+  assert oracle.check(g, runner.summaries(sim)) == Ok(Nil)
 }
 
 pub fn equal_weights_test() {
@@ -87,8 +87,8 @@ pub fn equal_weights_test() {
       Edge(0, 2, 5),
       Edge(1, 3, 5),
     ])
-  let states = runner.run(g)
-  assert oracle.check(g, runner.summaries(states)) == Ok(Nil)
+  let sim = runner.converge(g)
+  assert oracle.check(g, runner.summaries(sim)) == Ok(Nil)
 }
 
 pub fn random_graphs_pure_test() {
@@ -96,8 +96,8 @@ pub fn random_graphs_pure_test() {
   generator.ints(1, 20)
   |> list.each(fn(seed) {
     let g = generator.connected(seed, 15, 30)
-    let states = runner.run(g)
-    assert oracle.check(g, runner.summaries(states)) == Ok(Nil)
+    let sim = runner.converge(g)
+    assert oracle.check(g, runner.summaries(sim)) == Ok(Nil)
   })
 }
 
@@ -105,7 +105,7 @@ pub fn random_graphs_pure_larger_test() {
   generator.ints(21, 25)
   |> list.each(fn(seed) {
     let g = generator.connected(seed, 40, 15)
-    let states = runner.run(g)
-    assert oracle.check(g, runner.summaries(states)) == Ok(Nil)
+    let sim = runner.converge(g)
+    assert oracle.check(g, runner.summaries(sim)) == Ok(Nil)
   })
 }

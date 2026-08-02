@@ -58,6 +58,9 @@ pub type State {
 pub type Event {
   Wakeup
   Receive(on: EdgeId, msg: message.Msg)
+  /// A link carrying this edge was created: the edge was added to the
+  /// network. Both endpoints of the link observe this event.
+  LinkUp(edge: Edge)
   /// The link carrying this edge died: the edge was deleted, or the peer
   /// node crashed. Both endpoints of the link observe this event.
   LinkDown(on: EdgeId)
@@ -71,10 +74,7 @@ pub type Effect {
 pub fn init(id: NodeId, incident: List(Edge)) -> State {
   let edges =
     list.fold(incident, dict.new(), fn(d, e) {
-      let peer = case e.u == id {
-        True -> e.v
-        False -> e.u
-      }
+      let peer = graph.other_node(e, id)
       dict.insert(
         d,
         graph.edge_id(e.u, e.v),
@@ -97,14 +97,14 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
   )
 }
 
-/// Register a newly added incident edge. Tier 3: this is where the addition
-/// response protocol will be triggered; for now the node just learns the
-/// edge exists.
-pub fn add_edge(state: State, edge: Edge) -> State {
-  let peer = case edge.u == state.id {
-    True -> edge.v
-    False -> edge.u
-  }
+/// What this node knows about one of its incident edges.
+pub fn edge(state: State, on: EdgeId) -> Result(EdgeInfo, Nil) {
+  dict.get(state.edges, on)
+}
+
+/// Register a newly added incident edge.
+fn add_edge(state: State, edge: Edge) -> State {
+  let peer = graph.other_node(edge, state.id)
   State(
     ..state,
     edges: dict.insert(
@@ -112,6 +112,29 @@ pub fn add_edge(state: State, edge: Edge) -> State {
       graph.edge_id(edge.u, edge.v),
       EdgeInfo(peer:, edge:, status: Undecided),
     ),
+  )
+}
+
+/// Forget an incident edge that no longer exists, dropping every reference
+/// the node still holds to it
+fn remove_edge(state: State, on: EdgeId) -> State {
+  let forget = fn(held: Option(EdgeId)) {
+    case held == Some(on) {
+      True -> None
+      False -> held
+    }
+  }
+  let #(best_edge, best_wt) = case state.best_edge == Some(on) {
+    True -> #(None, None)
+    False -> #(state.best_edge, state.best_wt)
+  }
+  State(
+    ..state,
+    edges: dict.delete(state.edges, on),
+    in_branch: forget(state.in_branch),
+    test_edge: forget(state.test_edge),
+    best_edge:,
+    best_wt:,
   )
 }
 
@@ -151,13 +174,12 @@ fn drain(state: State) -> #(State, List(Effect)) {
 fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
   case event {
     Wakeup -> wakeup(state)
-    // Tier 2: the failure response protocol (fragment split, re-iden, MOE
-    // search) starts here. Until then the node keeps its state; the shell
-    // has already dropped the link, so nothing more is sent on the edge.
-    LinkDown(_) -> #(state, [])
+    // TODO: the addition response protocol starts here.
+    LinkUp(edge) -> #(add_edge(state, edge), [])
+    // TODO: the failure response protocol starts here
+    LinkDown(on) -> #(remove_edge(state, on), [])
     Receive(on, msg) ->
       case dict.has_key(state.edges, on) {
-        // Message on an edge we do not know: ignore (future tiers: removed edges).
         False -> #(state, [])
         True ->
           case msg {
