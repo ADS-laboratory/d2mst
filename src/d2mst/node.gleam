@@ -22,10 +22,21 @@ import gleam/dict.{type Dict}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
-pub type NodeState {
-  Sleeping
+pub type GHSNodeState {
   Searching
   Found
+}
+
+pub type D2MNodeState {
+  Reiden
+  MOESearch
+  Merge
+}
+
+pub type NodeState {
+  Sleeping
+  GHS(state: GHSNodeState)
+  D2M(state: D2MNodeState)
 }
 
 pub type EdgeStatus {
@@ -35,7 +46,7 @@ pub type EdgeStatus {
 }
 
 pub type EdgeInfo {
-  EdgeInfo(peer: NodeId, edge: Edge, status: EdgeStatus)
+  EdgeInfo(peer: NodeId, edge: Edge, status: EdgeStatus, failures_counter: Int)
 }
 
 /// The node state machine.
@@ -52,8 +63,14 @@ pub type State {
     best_edge: Option(EdgeId),
     best_wt: Option(Edge),
     test_edge: Option(EdgeId),
-    // rename to child_countdown? (is the number of children that have not yet reported)
-    find_count: Int,
+    // Children coundowns:
+    // - `find_countdown` counts how many children have not yet reported their best
+    //   outgoing weight.
+    // - `repair_countdown` counts how many children have not yet reported during repair.
+    // Potentially a single countdown could be used for both, but I think it is clearer to
+    // keep them separate.
+    find_countdown: Int,
+    repair_countdown: Int,
     halted: Bool,
     pending: List(#(EdgeId, message.Msg)),
   )
@@ -82,7 +99,7 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
       dict.insert(
         d,
         graph.edge_id(e.u, e.v),
-        EdgeInfo(peer:, edge: e, status: Undecided),
+        EdgeInfo(peer:, edge: e, status: Undecided, failures_counter: 0),
       )
     })
   State(
@@ -95,7 +112,8 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
     best_edge: None,
     best_wt: None,
     test_edge: None,
-    find_count: 0,
+    find_countdown: 0,
+    repair_countdown: 0,
     halted: False,
     pending: [],
   )

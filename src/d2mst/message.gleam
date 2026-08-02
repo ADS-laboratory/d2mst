@@ -8,7 +8,7 @@ import gleam/option.{type Option}
 /// (infinite weight in the original paper). `Halt` is our addition: once the
 /// core detects termination it broadcasts it down the tree so every node
 /// (and the tests) can observe completion.
-pub type Msg {
+pub type GHSMsg {
   Merge(level: Int)
   Initiate(level: Int, fragment: FragmentId, find: Bool)
   Test(level: Int, fragment: FragmentId)
@@ -17,6 +17,28 @@ pub type Msg {
   Notify(best: Option(Edge))
   ChangeRoot
   Halt
+}
+
+pub type D2MMsg {
+  /// Phase 1:
+  ReportFailure(failed_edge: EdgeId)
+  /// Phase 2:
+  ReIden
+  ReIdenAck
+  /// Phase 3 Naive:
+  ProbeMoe
+  ProbeReply(is_outgoing: Bool)
+  ReportMoe(best: Option(Edge))
+  /// Phase 4
+  Connect
+}
+
+pub type Msg {
+  // Plain GHS messages used to build the initial MST.
+  GHS(msg: GHSMsg)
+  // D2M messages used to repair the MST after a failure or addition. Fragment identity is
+  // included in every message to discard old messages from previous fragment versions.
+  D2M(msg: D2MMsg, fragment: FragmentId)
 }
 
 /// What a link delivers to an endpoint node: the protocol message together
