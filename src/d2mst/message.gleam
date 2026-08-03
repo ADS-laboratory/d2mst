@@ -35,10 +35,10 @@ pub type D2MMsg {
 
 pub type Msg {
   // Plain GHS messages used to build the initial MST.
-  GHS(msg: GHSMsg)
+  GHSMsg(msg: GHSMsg)
   // D2M messages used to repair the MST after a failure or addition. Fragment identity is
   // included in every message to discard old messages from previous fragment versions.
-  D2M(msg: D2MMsg, fragment: FragmentId)
+  D2MMsg(msg: D2MMsg, fragment: FragmentId)
 }
 
 /// What a link delivers to an endpoint node: the protocol message together
