@@ -29,7 +29,7 @@ pub fn handle_ghs_message(
   }
 }
 
-fn wakeup(state: State) -> #(State, List(Effect)) {
+pub fn wakeup(state: State) -> #(State, List(Effect)) {
   case state.ns {
     Sleeping ->
       case min_edge(state, fn(_) { True }) {

@@ -76,6 +76,10 @@ pub type State {
   )
 }
 
+pub fn min_undecided_edge(state: State) -> Option(EdgeId) {
+  min_edge(state, fn(info) { info.status == Undecided })
+}
+
 pub type Event {
   Wakeup
   Receive(on: EdgeId, msg: message.Msg)

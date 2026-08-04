@@ -1,4 +1,5 @@
-import d2mst/ghs.{handle_ghs_message}
+import d2mst/d2m.{handle_d2m_message}
+import d2mst/ghs.{handle_ghs_message, wakeup}
 import d2mst/graph.{type EdgeId}
 import d2mst/message
 import d2mst/node.{
@@ -59,12 +60,4 @@ fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
           }
       }
   }
-}
-
-fn handle_d2m_message(
-  _state: State,
-  _on: EdgeId,
-  _msg: message.D2MMsg,
-) -> #(State, List(Effect)) {
-  todo("D2M protocol not yet implemented")
 }
