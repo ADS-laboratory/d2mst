@@ -1,9 +1,9 @@
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
-import d2mst/message.{type D2MMsg, D2MMsg}
+import d2mst/message.{type D2MMsg, Connect, D2MMsg, Merge}
 import d2mst/node.{
-  type Effect, type State, D2MNodeState, MOESearch, Merge, Reiden, Selected,
-  Send, State, min_undecided_edge, opt_less,
+  type Effect, type State, D2MNodeState, MOESearch, Reiden, Selected, Send,
+  Sleeping, State, min_undecided_edge, opt_less, set_status,
 }
 import gleam/dict
 import gleam/list
@@ -21,7 +21,7 @@ pub fn handle_d2m_message(
     message.ProbeMoe -> on_probe_moe(state, on, state.fragment)
     message.ProbeReply(is_outgoing:) -> todo
     message.ReportMoe(best:) -> on_report_moe(state, on, best)
-    message.Connect -> todo
+    message.Connect -> on_connect(state, on, state.fragment)
   }
 }
 
@@ -212,6 +212,52 @@ fn check_and_report_moe(state: State) -> #(State, List(Effect)) {
         // Root: Phase 3 complete! Proceed to Phase 4 (Merge).
         None -> start_merge_phase(state)
       }
+    }
+  }
+}
+
+/// Phase 4: Root evaluates search results and initiates fragment reconnection.
+pub fn start_merge_phase(state: State) -> #(State, List(Effect)) {
+  case state.best_edge {
+    // No outgoing edge found: network partition / isolated fragment.
+    None -> #(State(..state, ns: Sleeping), [])
+
+    // MOE found: direct connection request towards boundary endpoint.
+    Some(moe_branch) -> propagate_connect(state, moe_branch)
+  }
+}
+
+/// Phase 4: Intermediate node routes Connect towards boundary node.
+fn on_connect(
+  state: State,
+  _from: EdgeId,
+  _msg_fragment: FragmentId,
+) -> #(State, List(Effect)) {
+  case state.best_edge {
+    Some(moe_branch) -> propagate_connect(state, moe_branch)
+    None -> #(state, [])
+  }
+}
+
+/// Helper: routes Connect down a tree branch or executes Merge across the MOE.
+fn propagate_connect(
+  state: State,
+  target_edge: EdgeId,
+) -> #(State, List(Effect)) {
+  let assert Ok(info) = dict.get(state.edges, target_edge)
+
+  case info.status {
+    // target_edge is a tree branch: forward Connect down toward boundary node.
+    Selected -> #(state, [
+      Send(target_edge, D2MMsg(msg: Connect, fragment: state.fragment)),
+    ])
+
+    // target_edge is non-tree: this node holds the MOE! Mark Selected and send Merge.
+    _ -> {
+      let state = set_status(state, target_edge, Selected)
+      #(state, [
+        Send(target_edge, D2MMsg(msg: Merge, fragment: state.fragment)),
+      ])
     }
   }
 }
