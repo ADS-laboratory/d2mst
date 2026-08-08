@@ -27,6 +27,7 @@ pub type D2MMsg {
   ReIdenAck
   /// Phase 3 Naive:
   ProbeMoe
+  ProbeEdge
   ProbeReply(is_outgoing: Bool)
   ReportMoe(best: Option(Edge))
   /// Phase 4

@@ -2,8 +2,8 @@ import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message.{type D2MMsg, Connect, D2MMsg, Merge}
 import d2mst/node.{
-  type Effect, type State, D2MNodeState, MOESearch, Reiden, Selected, Send,
-  Sleeping, State, min_undecided_edge, opt_less, set_status,
+  type Effect, type State, D2MNodeState, MOESearch, Reiden, Rejected, Selected,
+  Send, Sleeping, State, min_undecided_edge, opt_less, set_status,
 }
 import gleam/dict
 import gleam/list
@@ -18,8 +18,9 @@ pub fn handle_d2m_message(
     message.ReportFailure(failed_edge:) -> on_report_failure(state, failed_edge)
     message.ReIden -> on_reiden(state, on, state.fragment)
     message.ReIdenAck -> on_reiden_ack(state, on)
+    message.ProbeEdge -> on_probe_edge(state, on, state.fragment)
     message.ProbeMoe -> on_probe_moe(state, on, state.fragment)
-    message.ProbeReply(is_outgoing:) -> todo
+    message.ProbeReply(is_outgoing:) -> on_probe_reply(state, on, is_outgoing)
     message.ReportMoe(best:) -> on_report_moe(state, on, best)
     message.Connect -> on_connect(state, on, state.fragment)
   }
@@ -48,7 +49,7 @@ fn on_report_failure(
 }
 
 /// Phase 2: Root or intermediate node initiates/propagates RE-IDEN down tree branches.
-pub fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
+fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
   let children = branch_children(state)
   let state =
     State(
@@ -129,7 +130,7 @@ fn branch_children(state: State) -> List(EdgeId) {
 }
 
 /// Phase 3: Root or node starts probing for the Minimum Outgoing Edge (MOE).
-pub fn start_repair_search(state: State) -> #(State, List(Effect)) {
+fn start_repair_search(state: State) -> #(State, List(Effect)) {
   let children = branch_children(state)
   let state =
     State(
@@ -168,7 +169,7 @@ fn test_next_non_tree_edge(state: State) -> #(State, List(Effect)) {
     Some(eid) -> {
       let state = State(..state, test_edge: Some(eid))
       #(state, [
-        Send(eid, D2MMsg(msg: message.ProbeMoe, fragment: state.fragment)),
+        Send(eid, D2MMsg(msg: message.ProbeEdge, fragment: state.fragment)),
       ])
     }
     None -> {
@@ -216,8 +217,69 @@ fn check_and_report_moe(state: State) -> #(State, List(Effect)) {
   }
 }
 
+fn on_probe_edge(
+  state: State,
+  from: EdgeId,
+  msg_fragment: FragmentId,
+) -> #(State, List(Effect)) {
+  case msg_fragment == state.fragment {
+    // Same fragment: edge is internal.
+    True -> #(state, [
+      Send(
+        from,
+        D2MMsg(
+          msg: message.ProbeReply(is_outgoing: False),
+          fragment: state.fragment,
+        ),
+      ),
+    ])
+    // Different fragment: edge is outgoing.
+    False -> #(state, [
+      Send(
+        from,
+        D2MMsg(
+          msg: message.ProbeReply(is_outgoing: True),
+          fragment: state.fragment,
+        ),
+      ),
+    ])
+  }
+}
+
+fn on_probe_reply(
+  state: State,
+  from: EdgeId,
+  is_outgoing: Bool,
+) -> #(State, List(Effect)) {
+  case is_outgoing {
+    True -> {
+      let assert Ok(info) = dict.get(state.edges, from)
+      let candidate_edge = Some(info.edge)
+
+      // Update best local weight if smaller
+      let state = case opt_less(candidate_edge, state.best_wt) {
+        True -> State(..state, best_wt: candidate_edge, best_edge: Some(from))
+        False -> state
+      }
+
+      // Done testing local edges (since we test them from the smaller to larger); proceed to
+      // check if convergecast can finish.
+      let state = State(..state, test_edge: None)
+      check_and_report_moe(state)
+    }
+    False -> {
+      let state =
+        set_status(state, from, Rejected)
+        |> fn(s) { State(..s, test_edge: None) }
+
+      // Continue testing remaining non-tree edges.
+      test_next_non_tree_edge(state)
+    }
+  }
+}
+
 /// Phase 4: Root evaluates search results and initiates fragment reconnection.
-pub fn start_merge_phase(state: State) -> #(State, List(Effect)) {
+fn start_merge_phase(state: State) -> #(State, List(Effect)) {
   case state.best_edge {
     // No outgoing edge found: network partition / isolated fragment.
     None -> #(State(..state, ns: Sleeping), [])
