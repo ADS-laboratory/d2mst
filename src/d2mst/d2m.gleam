@@ -1,6 +1,6 @@
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
-import d2mst/message.{type D2MMsg, Connect, D2MMsg, Merge}
+import d2mst/message.{type D2MMsg, Connect, D2MMsg, SignalConnect}
 import d2mst/node.{
   type Effect, type State, D2MNodeState, MOESearch, Reiden, Rejected, Selected,
   Send, Sleeping, State, min_undecided_edge, opt_less, set_status,
@@ -22,7 +22,8 @@ pub fn handle_d2m_message(
     message.ProbeMoe -> on_probe_moe(state, on, state.fragment)
     message.ProbeReply(is_outgoing:) -> on_probe_reply(state, on, is_outgoing)
     message.ReportMoe(best:) -> on_report_moe(state, on, best)
-    message.Connect -> on_connect(state, on, state.fragment)
+    message.SignalConnect -> on_signal_connect(state, on, state.fragment)
+    message.Connect -> on_connect(state, on)
   }
 }
 
@@ -285,41 +286,60 @@ fn start_merge_phase(state: State) -> #(State, List(Effect)) {
     None -> #(State(..state, ns: Sleeping), [])
 
     // MOE found: direct connection request towards boundary endpoint.
-    Some(moe_branch) -> propagate_connect(state, moe_branch)
+    Some(moe_branch) -> propagate_signal_connect(state, moe_branch)
   }
 }
 
-/// Phase 4: Intermediate node routes Connect towards boundary node.
-fn on_connect(
+/// Phase 4: Intermediate node routes SignalConnect towards boundary node.
+fn on_signal_connect(
   state: State,
   _from: EdgeId,
   _msg_fragment: FragmentId,
 ) -> #(State, List(Effect)) {
   case state.best_edge {
-    Some(moe_branch) -> propagate_connect(state, moe_branch)
+    Some(moe_branch) -> propagate_signal_connect(state, moe_branch)
     None -> #(state, [])
   }
 }
 
-/// Helper: routes Connect down a tree branch or executes Merge across the MOE.
-fn propagate_connect(
+/// Helper: routes SignalConnect down a tree branch or executes Merge across the MOE.
+fn propagate_signal_connect(
   state: State,
   target_edge: EdgeId,
 ) -> #(State, List(Effect)) {
   let assert Ok(info) = dict.get(state.edges, target_edge)
 
   case info.status {
-    // target_edge is a tree branch: forward Connect down toward boundary node.
+    // target_edge is a tree branch: forward SignalConnect down toward boundary node.
     Selected -> #(state, [
-      Send(target_edge, D2MMsg(msg: Connect, fragment: state.fragment)),
+      Send(target_edge, D2MMsg(msg: SignalConnect, fragment: state.fragment)),
     ])
 
     // target_edge is non-tree: this node holds the MOE! Mark Selected and send Merge.
     _ -> {
       let state = set_status(state, target_edge, Selected)
       #(state, [
-        Send(target_edge, D2MMsg(msg: Merge, fragment: state.fragment)),
+        Send(target_edge, D2MMsg(msg: Connect, fragment: state.fragment)),
       ])
     }
   }
+}
+
+fn on_connect(state: State, from: EdgeId) -> #(State, List(Effect)) {
+  // Mark the MOE as a tree edge.
+  let state = set_status(state, from, Selected)
+
+  // New FragmentId with MOE as the new core.
+  let assert Ok(info) = dict.get(state.edges, from)
+  let new_fragment =
+    fragment.D2MCore(
+      edge: from,
+      node: None,
+      failures_counter: info.failures_counter,
+      // FIXME: where should this counter be incremented?
+    )
+  let state = State(..state, fragment: new_fragment, in_branch: None)
+
+  // Broadcast ReIden to all tree branches.
+  start_reiden_phase(state)
 }

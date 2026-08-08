@@ -31,6 +31,7 @@ pub type D2MMsg {
   ProbeReply(is_outgoing: Bool)
   ReportMoe(best: Option(Edge))
   /// Phase 4
+  SignalConnect
   Connect
 }
 

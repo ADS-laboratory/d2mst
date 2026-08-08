@@ -19,6 +19,6 @@ pub type FragmentId {
   /// 
   /// The counter is used to distinguish between old and new failures / additions of the
   /// same edge: the counter is incremented each time the edge is removed.
-  D2MCore(edge: EdgeId, node: Option(NodeId), counter: Int)
+  D2MCore(edge: EdgeId, node: Option(NodeId), failures_counter: Int)
   GHSCore(edge: EdgeId)
 }
