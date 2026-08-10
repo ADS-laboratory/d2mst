@@ -31,12 +31,34 @@ pub type Summary {
   )
 }
 
+/// Helper: Determines if this node is the designated root across a core edge `j`.
+fn is_core_root(
+  frag: fragment.FragmentId,
+  in_branch_edge: EdgeId,
+  id: NodeId,
+  peer: NodeId,
+) -> Bool {
+  case frag {
+    // Standard GHS core: tie-break using smaller NodeId.
+    fragment.GHSCore(edge) if edge == in_branch_edge -> id < peer
+
+    // D2M Core after edge addition (node is None): tie-break using smaller NodeId.
+    fragment.D2MCore(edge, None, _) if edge == in_branch_edge -> id < peer
+
+    // D2M Core after edge removal: symmetry is already broken by `Some(n)`,
+    // so the endpoint matching `id == n` is the root.
+    fragment.D2MCore(edge, Some(n), _) if edge == in_branch_edge -> id == n
+
+    _ -> False
+  }
+}
+
 pub fn summarise(state: node.State) -> Summary {
   let parent = case state.in_branch {
     None -> None
     Some(j) -> {
       let assert Ok(info) = dict.get(state.edges, j)
-      case state.fragment == fragment.Core(j) && state.id < info.peer {
+      case is_core_root(state.fragment, j, state.id, info.peer) {
         True -> None
         False -> Some(info.peer)
       }
