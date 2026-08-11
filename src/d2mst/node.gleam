@@ -57,8 +57,7 @@ pub type State {
     ns: NodeState,
     fragment: FragmentId,
     level: Int,
-    // rename to parent_edge?
-    in_branch: Option(EdgeId),
+    parent_edge: Option(EdgeId),
     // rename to edge_to_best? (is the local edge towards the best outgoing weight found so far)
     best_edge: Option(EdgeId),
     best_wt: Option(Edge),
@@ -112,7 +111,7 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
     ns: Sleeping,
     fragment: fragment.Singleton(id),
     level: 0,
-    in_branch: None,
+    parent_edge: None,
     best_edge: None,
     best_wt: None,
     test_edge: None,
@@ -151,29 +150,6 @@ pub fn add_edge(state: State, edge: Edge) -> State {
         failures_counter: failures_counter,
       ),
     ),
-  )
-}
-
-/// Forget an incident edge that no longer exists, dropping every reference
-/// the node still holds to it
-pub fn remove_edge(state: State, on: EdgeId) -> State {
-  let forget = fn(held: Option(EdgeId)) {
-    case held == Some(on) {
-      True -> None
-      False -> held
-    }
-  }
-  let #(best_edge, best_wt) = case state.best_edge == Some(on) {
-    True -> #(None, None)
-    False -> #(state.best_edge, state.best_wt)
-  }
-  State(
-    ..state,
-    edges: dict.delete(state.edges, on),
-    in_branch: forget(state.in_branch),
-    test_edge: forget(state.test_edge),
-    best_edge:,
-    best_wt:,
   )
 }
 

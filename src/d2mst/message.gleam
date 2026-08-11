@@ -21,7 +21,7 @@ pub type GHSMsg {
 
 pub type D2MMsg {
   /// Phase 1:
-  ReportFailure(failed_edge: EdgeId)
+  ReportFailure
   /// Phase 2:
   ReIden
   ReIdenAck

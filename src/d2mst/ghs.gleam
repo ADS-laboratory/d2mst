@@ -104,7 +104,7 @@ fn on_initiate(
       level: l,
       fragment: f,
       ns:,
-      in_branch: Some(j),
+      parent_edge: Some(j),
       best_edge: None,
       best_wt: None,
       test_edge: None,
@@ -212,7 +212,7 @@ fn report(state: State) -> #(State, List(Effect)) {
   case state.find_countdown == 0 && state.test_edge == None {
     True -> {
       let state = State(..state, ns: GHSNodeState(Found))
-      case state.in_branch {
+      case state.parent_edge {
         Some(j) -> #(state, [Send(j, GHSMsg(Notify(state.best_wt)))])
         None -> #(state, [])
       }
@@ -227,7 +227,7 @@ fn on_notification(
   j: EdgeId,
   w: Option(Edge),
 ) -> #(State, List(Effect)) {
-  case Some(j) != state.in_branch {
+  case Some(j) != state.parent_edge {
     // Notify from a child.
     True -> {
       let state = State(..state, find_countdown: state.find_countdown - 1)
@@ -271,7 +271,7 @@ fn change_root(state: State) -> #(State, List(Effect)) {
 fn halt(state: State) -> #(State, List(Effect)) {
   let state = State(..state, halted: True)
   let effects =
-    branch_edges_except(state, state.in_branch)
+    branch_edges_except(state, state.parent_edge)
     |> list.map(fn(eid) { Send(eid, GHSMsg(Halt)) })
   #(state, effects)
 }

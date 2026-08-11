@@ -9,13 +9,49 @@ import gleam/dict
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
+/// Phase 1: calculate 
+pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
+  // Remove edge from the current state
+  let forget = fn(held: Option(EdgeId)) {
+    case held == Some(on) {
+      True -> None
+      False -> held
+    }
+  }
+  let #(best_edge, best_wt) = case state.best_edge == Some(on) {
+    True -> #(None, None)
+    False -> #(state.best_edge, state.best_wt)
+  }
+
+  // Update fragment id
+  let assert Ok(info) = dict.get(state.edges, on)
+  let fragment_id = fragment.D2MCore(on, Some(state.id), info.failures_counter)
+
+  // Update state
+  let state =
+    State(
+      ..state,
+      edges: dict.delete(state.edges, on),
+      parent_edge: forget(state.parent_edge),
+      test_edge: forget(state.test_edge),
+      fragment: fragment_id,
+      best_edge:,
+      best_wt:,
+    )
+
+  // propagate failure up the tree until it reaches the root
+  on_report_failure(state)
+}
+
 pub fn handle_d2m_message(
   state: State,
   on: EdgeId,
   msg: D2MMsg,
+  message_fragment_id: FragmentId,
 ) -> #(State, List(Effect)) {
   case msg {
-    message.ReportFailure(failed_edge:) -> on_report_failure(state, failed_edge)
+    message.ReportFailure ->
+      on_report_failure(State(..state, fragment: message_fragment_id))
     message.ReIden -> on_reiden(state, on, state.fragment)
     message.ReIdenAck -> on_reiden_ack(state, on)
     message.ProbeEdge -> on_probe_edge(state, on, state.fragment)
@@ -28,11 +64,8 @@ pub fn handle_d2m_message(
 }
 
 /// Phase 1: Forward failure upward until it hits the fragment root.
-fn on_report_failure(
-  state: State,
-  failed_edge: EdgeId,
-) -> #(State, List(Effect)) {
-  case state.in_branch {
+fn on_report_failure(state: State) -> #(State, List(Effect)) {
+  case state.parent_edge {
     // Reached the root of the fragment: start Phase 2.
     None -> start_reiden_phase(state)
 
@@ -40,10 +73,7 @@ fn on_report_failure(
     Some(parent_edge) -> #(state, [
       Send(
         parent_edge,
-        D2MMsg(
-          msg: message.ReportFailure(failed_edge: failed_edge),
-          fragment: state.fragment,
-        ),
+        D2MMsg(msg: message.ReportFailure, fragment: state.fragment),
       ),
     ])
   }
@@ -62,7 +92,7 @@ fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
   case children {
     // Leaf node or single-node root
     [] ->
-      case state.in_branch {
+      case state.parent_edge {
         // Root with no children: Phase 2 is immediately done; start Phase 3!
         None -> start_repair_search(state)
 
@@ -92,18 +122,19 @@ fn on_reiden(
   from: EdgeId,
   new_fragment: FragmentId,
 ) -> #(State, List(Effect)) {
-  let state = State(..state, fragment: new_fragment, in_branch: Some(from))
+  let state = State(..state, fragment: new_fragment, parent_edge: Some(from))
   start_reiden_phase(state)
 }
 
 /// Phase 2: Convergecast acknowledgment from a child.
 fn on_reiden_ack(state: State, _from: EdgeId) -> #(State, List(Effect)) {
+  // TODO: should we check for the correct fragment id here? (and for other messages)
   let state = State(..state, repair_countdown: state.repair_countdown - 1)
 
   case state.repair_countdown == 0 {
     False -> #(state, [])
     True ->
-      case state.in_branch {
+      case state.parent_edge {
         // Root collected all ACKs: Phase 2 complete! Proceed to Phase 3.
         None -> start_repair_search(state)
 
@@ -118,12 +149,12 @@ fn on_reiden_ack(state: State, _from: EdgeId) -> #(State, List(Effect)) {
   }
 }
 
-/// Helper: returns tree edges connected to children (excludes in_branch).
+/// Helper: returns tree edges connected to children (excludes parent_edge).
 fn branch_children(state: State) -> List(EdgeId) {
   dict.to_list(state.edges)
   |> list.filter_map(fn(pair) {
     let #(eid, info) = pair
-    case info.status == Selected && Some(eid) != state.in_branch {
+    case info.status == Selected && Some(eid) != state.parent_edge {
       True -> Ok(eid)
       False -> Error(Nil)
     }
@@ -160,7 +191,7 @@ fn on_probe_moe(
   from: EdgeId,
   msg_fragment: FragmentId,
 ) -> #(State, List(Effect)) {
-  let state = State(..state, in_branch: Some(from), fragment: msg_fragment)
+  let state = State(..state, parent_edge: Some(from), fragment: msg_fragment)
   start_repair_search(state)
 }
 
@@ -199,7 +230,7 @@ fn check_and_report_moe(state: State) -> #(State, List(Effect)) {
   case state.find_countdown == 0 && state.test_edge == None {
     False -> #(state, [])
     True -> {
-      case state.in_branch {
+      case state.parent_edge {
         // Internal node: report subtree's best MOE up to parent
         Some(parent_edge) -> #(state, [
           Send(
@@ -338,7 +369,7 @@ fn on_connect(state: State, from: EdgeId) -> #(State, List(Effect)) {
       failures_counter: info.failures_counter,
       // FIXME: where should this counter be incremented?
     )
-  let state = State(..state, fragment: new_fragment, in_branch: None)
+  let state = State(..state, fragment: new_fragment, parent_edge: None)
 
   // Broadcast ReIden to all tree branches.
   start_reiden_phase(state)
