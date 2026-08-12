@@ -9,8 +9,12 @@ import gleam/dict
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
-/// Phase 1: calculate 
+/// Phase 1: a link died. Drop every reference this node still holds to the
+/// edge and, only if it was a tree edge, re-identify the fragment and start
+/// the failure response protocol.
 pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
+  let assert Ok(info) = dict.get(state.edges, on)
+
   // Remove edge from the current state
   let forget = fn(held: Option(EdgeId)) {
     case held == Some(on) {
@@ -22,25 +26,28 @@ pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
     True -> #(None, None)
     False -> #(state.best_edge, state.best_wt)
   }
-
-  // Update fragment id
-  let assert Ok(info) = dict.get(state.edges, on)
-  let fragment_id = fragment.D2MCore(on, Some(state.id), info.failures_counter)
-
-  // Update state
   let state =
     State(
       ..state,
       edges: dict.delete(state.edges, on),
       parent_edge: forget(state.parent_edge),
       test_edge: forget(state.test_edge),
-      fragment: fragment_id,
       best_edge:,
       best_wt:,
     )
 
-  // propagate failure up the tree until it reaches the root
-  on_report_failure(state)
+  case info.status {
+    // Tree edge: the fragment is split in two. Take the new identity
+    // and propagate the failure up to the root.
+    Selected -> {
+      let fragment_id =
+        fragment.D2MCore(on, Some(state.id), info.failures_counter)
+      on_report_failure(State(..state, fragment: fragment_id))
+    }
+
+    // Non-tree edge: the fragment is untouched, nothing to repair.
+    _ -> #(state, [])
+  }
 }
 
 pub fn handle_d2m_message(
