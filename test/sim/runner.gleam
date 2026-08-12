@@ -10,6 +10,7 @@
 //// written here first, where it is reproducible, and then replayed on the
 //// actor runtime.
 
+import d2mst/algorithm
 import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId}
 import d2mst/node
 import engine/logger
@@ -158,7 +159,7 @@ fn step(sim: Sim, target: NodeId, event: node.Event) -> Sim {
   case dict.get(sim.states, target) {
     Error(_) -> sim
     Ok(st) -> {
-      let #(st, effects) = node.handle(st, event)
+      let #(st, effects) = algorithm.handle(st, event)
       let sim = Sim(..sim, states: dict.insert(sim.states, target, st))
       enqueue(
         sim,

@@ -5,6 +5,7 @@
 //// sending to link actors, reporting every send and every state change to
 //// the logger.
 
+import d2mst/algorithm
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message
 import d2mst/node.{
@@ -114,7 +115,7 @@ fn shell_handle(shell: Shell, msg: CtlMsg) -> actor.Next(Shell, CtlMsg) {
 
 // Dispatch a node event to the protocol
 fn run(shell: Shell, event: Event) -> actor.Next(Shell, CtlMsg) {
-  let #(state, effects) = node.handle(shell.state, event)
+  let #(state, effects) = algorithm.handle(shell.state, event)
   list.each(effects, fn(effect) {
     let Send(on, m) = effect
     case dict.get(shell.links, on) {

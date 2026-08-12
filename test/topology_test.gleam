@@ -107,7 +107,8 @@ pub fn messages_in_flight_on_a_dead_link_are_lost_test() {
     runner.new(triangle())
     |> runner.wake(0)
     |> runner.step_one
-  assert sim.queue == [#(1, node.Receive(EdgeId(0, 1), message.Merge(0)))]
+  assert sim.queue
+    == [#(1, node.Receive(EdgeId(0, 1), message.GHSMsg(message.Merge(0))))]
   let sim = runner.fail_link(sim, 0, 1)
   assert sim.queue
     == [#(0, node.LinkDown(EdgeId(0, 1))), #(1, node.LinkDown(EdgeId(0, 1)))]
@@ -121,10 +122,10 @@ pub fn losing_the_branch_edge_clears_the_parent_test() {
   // gives it a new fragment.
   let sim = runner.converge(triangle())
   let assert Ok(before) = runner.state(sim, 1)
-  assert before.in_branch == Some(EdgeId(0, 1))
+  assert before.parent_edge == Some(EdgeId(0, 1))
 
   let sim = runner.fail_link(sim, 0, 1) |> runner.settle
   let assert Ok(after) = runner.state(sim, 1)
-  assert after.in_branch == None
+  assert after.parent_edge == None
   assert node.branch_edges_except(after, None) == [EdgeId(1, 2)]
 }

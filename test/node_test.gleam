@@ -1,7 +1,8 @@
 //// Tests of the pure GHS state machine: single transitions via
-//// `node.handle`, and whole protocol runs through the deterministic
+//// `algorithm.handle`, and whole protocol runs through the deterministic
 //// process-free runner.
 
+import d2mst/algorithm
 import d2mst/graph.{Edge, EdgeId, Graph}
 import d2mst/message
 import d2mst/node
@@ -14,17 +15,17 @@ import sim/runner
 
 pub fn wakeup_connects_on_min_edge_test() {
   let st = node.init(0, [Edge(0, 1, 5), Edge(0, 2, 3)])
-  let #(st, effects) = node.handle(st, node.Wakeup)
-  assert effects == [node.Send(EdgeId(0, 2), message.Merge(0))]
+  let #(st, effects) = algorithm.handle(st, node.Wakeup)
+  assert effects == [node.Send(EdgeId(0, 2), message.GHSMsg(message.Merge(0)))]
   assert logger.summarise(st).tree_edges == [EdgeId(0, 2)]
   // A second wakeup is a no-op.
-  let #(_, effects) = node.handle(st, node.Wakeup)
+  let #(_, effects) = algorithm.handle(st, node.Wakeup)
   assert effects == []
 }
 
 pub fn isolated_node_halts_test() {
   let st = node.init(7, [])
-  let #(st, effects) = node.handle(st, node.Wakeup)
+  let #(st, effects) = algorithm.handle(st, node.Wakeup)
   assert effects == []
   let summary = logger.summarise(st)
   assert summary.halted
@@ -35,9 +36,9 @@ pub fn connect_from_lower_level_is_deferred_on_basic_edge_test() {
   // Node 0 wakes and chooses edge (0,2); a Merge(0) arriving on the basic
   // edge (0,1) at the same level must wait, not be answered.
   let st = node.init(0, [Edge(0, 1, 5), Edge(0, 2, 3)])
-  let #(st, _) = node.handle(st, node.Wakeup)
+  let #(st, _) = algorithm.handle(st, node.Wakeup)
   let #(_, effects) =
-    node.handle(st, node.Receive(EdgeId(0, 1), message.Merge(0)))
+    algorithm.handle(st, node.Receive(EdgeId(0, 1), message.GHSMsg(message.Merge(0))))
   assert effects == []
 }
 
