@@ -59,13 +59,13 @@ pub fn handle_d2m_message(
   case msg {
     message.ReportFailure ->
       on_report_failure(State(..state, fragment: message_fragment_id))
-    message.ReIden -> on_reiden(state, on, state.fragment)
+    message.ReIden -> on_reiden(state, on, message_fragment_id)
     message.ReIdenAck -> on_reiden_ack(state, on)
-    message.ProbeEdge -> on_probe_edge(state, on, state.fragment)
-    message.ProbeMoe -> on_probe_moe(state, on, state.fragment)
+    message.ProbeEdge -> on_probe_edge(state, on, message_fragment_id)
+    message.ProbeMoe -> on_probe_moe(state, on)
     message.ProbeReply(is_outgoing:) -> on_probe_reply(state, on, is_outgoing)
     message.ReportMoe(best:) -> on_report_moe(state, on, best)
-    message.SignalConnect -> on_signal_connect(state, on, state.fragment)
+    message.SignalConnect -> on_signal_connect(state)
     message.Connect -> on_connect(state, on)
   }
 }
@@ -193,12 +193,8 @@ fn start_repair_search(state: State) -> #(State, List(Effect)) {
 }
 
 /// Phase 3: Handles ProbeMoe broadcast from parent.
-fn on_probe_moe(
-  state: State,
-  from: EdgeId,
-  msg_fragment: FragmentId,
-) -> #(State, List(Effect)) {
-  let state = State(..state, parent_edge: Some(from), fragment: msg_fragment)
+fn on_probe_moe(state: State, from: EdgeId) -> #(State, List(Effect)) {
+  let state = State(..state, parent_edge: Some(from))
   start_repair_search(state)
 }
 
@@ -329,11 +325,7 @@ fn start_merge_phase(state: State) -> #(State, List(Effect)) {
 }
 
 /// Phase 4: Intermediate node routes SignalConnect towards boundary node.
-fn on_signal_connect(
-  state: State,
-  _from: EdgeId,
-  _msg_fragment: FragmentId,
-) -> #(State, List(Effect)) {
+fn on_signal_connect(state: State) -> #(State, List(Effect)) {
   case state.best_edge {
     Some(moe_branch) -> propagate_signal_connect(state, moe_branch)
     None -> #(state, [])
@@ -378,6 +370,15 @@ fn on_connect(state: State, from: EdgeId) -> #(State, List(Effect)) {
     )
   let state = State(..state, fragment: new_fragment, parent_edge: None)
 
-  // Broadcast ReIden to all tree branches.
-  start_reiden_phase(state)
+  // Deterministically elect a single root.
+  let is_new_root = state.id == from.high
+
+  case is_new_root {
+    // Designated Root: parent_edge stays None
+    True ->
+      State(..state, fragment: new_fragment, parent_edge: None)
+      |> start_reiden_phase
+    // Non-Root Endpoint: point parent_edge across the MOE to the new root
+    False -> #(State(..state, parent_edge: Some(from)), [])
+  }
 }
