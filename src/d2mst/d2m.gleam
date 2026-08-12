@@ -2,9 +2,9 @@ import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message.{type D2MMsg, Connect, D2MMsg, SignalConnect}
 import d2mst/node.{
-  type Effect, type State, D2MNodeState, MOESearch, Reiden, Rejected, Selected,
-  Send, Sleeping, State, bump_failure_count, failure_count, min_undecided_edge,
-  opt_less, set_status,
+  type Effect, type State, D2MNodeState, EdgeInfo, MOESearch, Reiden, Rejected,
+  Selected, Send, Sleeping, State, Undecided, bump_failure_count, failure_count,
+  min_undecided_edge, opt_less, set_status,
 }
 import gleam/dict
 import gleam/list
@@ -15,6 +15,7 @@ import gleam/option.{type Option, None, Some}
 /// the failure response protocol.
 pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
   let assert Ok(info) = dict.get(state.edges, on)
+  let was_probing = state.test_edge == Some(on)
 
   // Remove edge from the current state
   let forget = fn(held: Option(EdgeId)) {
@@ -48,8 +49,14 @@ pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
       on_report_failure(State(..state, fragment: fragment_id))
     }
 
-    // Non-tree edge: the fragment is untouched, nothing to repair.
-    _ -> #(state, [])
+    // Non-tree edge: the fragment is untouched.
+    // If this was the edge we were probing the reply will never come: move
+    // on to the next candidate so the MOE search does not stall.
+    _ ->
+      case was_probing {
+        True -> test_next_non_tree_edge(state)
+        False -> #(state, [])
+      }
   }
 }
 
@@ -173,16 +180,25 @@ fn branch_children(state: State) -> List(EdgeId) {
 
 /// Phase 3: Root or node starts probing for the Minimum Outgoing Edge (MOE).
 fn start_repair_search(state: State) -> #(State, List(Effect)) {
-  let children = branch_children(state)
+  // Reset the MOE search state (edges status)
+  let edges =
+    dict.map_values(state.edges, fn(_, info) {
+      case info.status {
+        Rejected -> EdgeInfo(..info, status: Undecided)
+        _ -> info
+      }
+    })
   let state =
     State(
       ..state,
+      edges:,
       ns: D2MNodeState(MOESearch),
-      find_countdown: list.length(children),
       best_wt: None,
       best_edge: None,
       test_edge: None,
     )
+  let children = branch_children(state)
+  let state = State(..state, find_countdown: list.length(children))
 
   // Broadcast ProbeMoe down tree branches.
   let child_effects =
