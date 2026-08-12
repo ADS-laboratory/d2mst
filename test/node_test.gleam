@@ -38,7 +38,10 @@ pub fn connect_from_lower_level_is_deferred_on_basic_edge_test() {
   let st = node.init(0, [Edge(0, 1, 5), Edge(0, 2, 3)])
   let #(st, _) = algorithm.handle(st, node.Wakeup)
   let #(_, effects) =
-    algorithm.handle(st, node.Receive(EdgeId(0, 1), message.GHSMsg(message.Merge(0))))
+    algorithm.handle(
+      st,
+      node.Receive(EdgeId(0, 1), message.GHSMsg(message.Merge(0))),
+    )
   assert effects == []
 }
 

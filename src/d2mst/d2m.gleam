@@ -1,10 +1,12 @@
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
-import d2mst/message.{type D2MMsg, Connect, D2MMsg, SignalConnect}
+import d2mst/message.{
+  type D2MMsg, Connect, D2MMsg, SignalConnect, is_intra_fragment,
+}
 import d2mst/node.{
-  type Effect, type State, D2MNodeState, EdgeInfo, MOESearch, Reiden, Rejected,
-  Selected, Send, Sleeping, State, Undecided, bump_failure_count, failure_count,
-  min_undecided_edge, opt_less, set_status,
+  type Effect, type State, D2MNodeState, EdgeInfo, MOESearch, Merge, Reiden,
+  Rejected, Selected, Send, Sleeping, State, Undecided, branch_edges_except,
+  bump_failure_count, failure_count, min_undecided_edge, opt_less, set_status,
 }
 import gleam/dict
 import gleam/list
@@ -44,10 +46,11 @@ pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
   case info.status {
     // Tree edge: the fragment is split in two. Take the new identity
     // and propagate the failure up to the root.
-    Selected -> {
-      let fragment_id = fragment.D2MCore(on, Some(state.id), k)
-      on_report_failure(State(..state, fragment: fragment_id))
-    }
+    Selected ->
+      on_report_failure(
+        state,
+        fragment.D2MCore(edge: on, node: Some(state.id), failures_counter: k),
+      )
 
     // Non-tree edge: the fragment is untouched.
     // If this was the edge we were probing the reply will never come: move
@@ -66,31 +69,45 @@ pub fn handle_d2m_message(
   msg: D2MMsg,
   message_fragment_id: FragmentId,
 ) -> #(State, List(Effect)) {
-  case msg {
-    message.ReportFailure ->
-      on_report_failure(State(..state, fragment: message_fragment_id))
-    message.ReIden -> on_reiden(state, on, message_fragment_id)
-    message.ReIdenAck -> on_reiden_ack(state, on)
-    message.ProbeEdge -> on_probe_edge(state, on, message_fragment_id)
-    message.ProbeMoe -> on_probe_moe(state, on)
-    message.ProbeReply(is_outgoing:) -> on_probe_reply(state, on, is_outgoing)
-    message.ReportMoe(best:) -> on_report_moe(state, on, best)
-    message.SignalConnect -> on_signal_connect(state)
-    message.Connect -> on_connect(state, on)
+  case is_intra_fragment(msg) && message_fragment_id != state.fragment {
+    // A superseded round gets silently discarded
+    True -> #(state, [])
+    False ->
+      case msg {
+        message.ReportFailure(new_fragment:) ->
+          on_report_failure(state, new_fragment)
+        message.ReIden -> on_reiden(state, on, message_fragment_id)
+        message.ReIdenAck -> on_reiden_ack(state, on)
+        message.ProbeEdge -> on_probe_edge(state, on, message_fragment_id)
+        message.ProbeMoe -> on_probe_moe(state, on)
+        message.ProbeReply(is_outgoing:, probed:) ->
+          on_probe_reply(state, on, is_outgoing, probed)
+        message.ReportMoe(best:) -> on_report_moe(state, on, best)
+        message.SignalConnect -> on_signal_connect(state)
+        message.GoSleep -> on_go_sleep(state, on)
+        message.Connect -> on_connect(state, on)
+      }
   }
 }
 
 /// Phase 1: Forward failure upward until it hits the fragment root.
-fn on_report_failure(state: State) -> #(State, List(Effect)) {
+/// The root adopts the new identity and starts Phase 2 (ReIden) down the tree.
+fn on_report_failure(
+  state: State,
+  reported: FragmentId,
+) -> #(State, List(Effect)) {
   case state.parent_edge {
     // Reached the root of the fragment: start Phase 2.
-    None -> start_reiden_phase(state)
+    None -> start_reiden_phase(State(..state, fragment: reported))
 
     // Forward notification upward to parent.
     Some(parent_edge) -> #(state, [
       Send(
         parent_edge,
-        D2MMsg(msg: message.ReportFailure, fragment: state.fragment),
+        D2MMsg(
+          msg: message.ReportFailure(new_fragment: reported),
+          fragment: state.fragment,
+        ),
       ),
     ])
   }
@@ -133,7 +150,8 @@ fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
   }
 }
 
-/// Phase 2: Node receives ReIden from parent.
+/// Phase 2: Node receives ReIden from parent: adopt the identity it carries
+/// and continue the wave.
 fn on_reiden(
   state: State,
   from: EdgeId,
@@ -145,7 +163,6 @@ fn on_reiden(
 
 /// Phase 2: Convergecast acknowledgment from a child.
 fn on_reiden_ack(state: State, _from: EdgeId) -> #(State, List(Effect)) {
-  // TODO: should we check for the correct fragment id here? (and for other messages)
   let state = State(..state, repair_countdown: state.repair_countdown - 1)
 
   case state.repair_countdown == 0 {
@@ -271,76 +288,95 @@ fn check_and_report_moe(state: State) -> #(State, List(Effect)) {
   }
 }
 
+/// Phase 3: a neighbour is testing the edge between us. The identity carried
+/// by the probe is the sender's, so a mismatch means the edge leaves our
+/// fragment (the same comparison GHS makes in `ghs.on_test`).
 fn on_probe_edge(
   state: State,
   from: EdgeId,
-  msg_fragment: FragmentId,
+  message_fragment: FragmentId,
 ) -> #(State, List(Effect)) {
-  case msg_fragment == state.fragment {
-    // Same fragment: edge is internal.
-    True -> #(state, [
-      Send(
-        from,
-        D2MMsg(
-          msg: message.ProbeReply(is_outgoing: False),
-          fragment: state.fragment,
-        ),
+  let is_outgoing = message_fragment != state.fragment
+  #(state, [
+    Send(
+      from,
+      D2MMsg(
+        msg: message.ProbeReply(is_outgoing:, probed: message_fragment),
+        fragment: state.fragment,
       ),
-    ])
-    // Different fragment: edge is outgoing.
-    False -> #(state, [
-      Send(
-        from,
-        D2MMsg(
-          msg: message.ProbeReply(is_outgoing: True),
-          fragment: state.fragment,
-        ),
-      ),
-    ])
-  }
+    ),
+  ])
 }
 
 fn on_probe_reply(
   state: State,
   from: EdgeId,
   is_outgoing: Bool,
+  probed: FragmentId,
 ) -> #(State, List(Effect)) {
-  case is_outgoing {
-    True -> {
-      let assert Ok(info) = dict.get(state.edges, from)
-      let candidate_edge = Some(info.edge)
+  case probed == state.fragment {
+    // The reply answers a probe we sent under a previous identity, ignore it.
+    False -> #(state, [])
 
-      // Update best local weight if smaller
-      let state = case opt_less(candidate_edge, state.best_wt) {
-        True -> State(..state, best_wt: candidate_edge, best_edge: Some(from))
-        False -> state
+    True ->
+      case is_outgoing {
+        True -> {
+          let assert Ok(info) = dict.get(state.edges, from)
+          let candidate_edge = Some(info.edge)
+
+          // Update best local weight if smaller
+          let state = case opt_less(candidate_edge, state.best_wt) {
+            True ->
+              State(..state, best_wt: candidate_edge, best_edge: Some(from))
+            False -> state
+          }
+
+          // Done testing local edges (since we test them from the smaller to
+          // larger); proceed to check if convergecast can finish.
+          let state = State(..state, test_edge: None)
+          check_and_report_moe(state)
+        }
+        False -> {
+          let state =
+            set_status(state, from, Rejected)
+            |> fn(s) { State(..s, test_edge: None) }
+
+          // Continue testing remaining non-tree edges.
+          test_next_non_tree_edge(state)
+        }
       }
-
-      // Done testing local edges (since we test them from the smaller to larger); proceed to
-      // check if convergecast can finish.
-      let state = State(..state, test_edge: None)
-      check_and_report_moe(state)
-    }
-    False -> {
-      let state =
-        set_status(state, from, Rejected)
-        |> fn(s) { State(..s, test_edge: None) }
-
-      // Continue testing remaining non-tree edges.
-      test_next_non_tree_edge(state)
-    }
   }
 }
 
 /// Phase 4: Root evaluates search results and initiates fragment reconnection.
 fn start_merge_phase(state: State) -> #(State, List(Effect)) {
   case state.best_edge {
-    // No outgoing edge found: network partition / isolated fragment.
-    None -> #(State(..state, ns: Sleeping), [])
+    // No outgoing edge found: network partition / isolated fragment. Put
+    // every node into Sleep state.
+    None -> {
+      let state = State(..state, ns: Sleeping)
+      let effects =
+        branch_children(state)
+        |> list.map(fn(eid) {
+          Send(eid, D2MMsg(msg: message.GoSleep, fragment: state.fragment))
+        })
+      #(state, effects)
+    }
 
     // MOE found: direct connection request towards boundary endpoint.
     Some(moe_branch) -> propagate_signal_connect(state, moe_branch)
   }
+}
+
+/// A GoSleep broadcast from the root: enter the terminal state, pass it on.
+fn on_go_sleep(state: State, from: EdgeId) -> #(State, List(Effect)) {
+  let state = State(..state, ns: Sleeping)
+  let effects =
+    branch_edges_except(state, Some(from))
+    |> list.map(fn(eid) {
+      Send(eid, D2MMsg(msg: message.GoSleep, fragment: state.fragment))
+    })
+  #(state, effects)
 }
 
 /// Phase 4: Intermediate node routes SignalConnect towards boundary node.
@@ -356,6 +392,7 @@ fn propagate_signal_connect(
   state: State,
   target_edge: EdgeId,
 ) -> #(State, List(Effect)) {
+  let state = State(..state, ns: D2MNodeState(Merge))
   let assert Ok(info) = dict.get(state.edges, target_edge)
 
   case info.status {
