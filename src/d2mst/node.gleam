@@ -46,7 +46,7 @@ pub type EdgeStatus {
 }
 
 pub type EdgeInfo {
-  EdgeInfo(peer: NodeId, edge: Edge, status: EdgeStatus, failures_counter: Int)
+  EdgeInfo(peer: NodeId, edge: Edge, status: EdgeStatus)
 }
 
 /// The node state machine.
@@ -54,6 +54,8 @@ pub type State {
   State(
     id: NodeId,
     edges: Dict(EdgeId, EdgeInfo),
+    /// `k(e)`: how many times each incident edge has failed so far
+    failure_counts: Dict(EdgeId, Int),
     ns: NodeState,
     fragment: FragmentId,
     level: Int,
@@ -102,12 +104,13 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
       dict.insert(
         d,
         graph.edge_id(e.u, e.v),
-        EdgeInfo(peer:, edge: e, status: Undecided, failures_counter: 0),
+        EdgeInfo(peer:, edge: e, status: Undecided),
       )
     })
   State(
     id:,
     edges:,
+    failure_counts: dict.new(),
     ns: Sleeping,
     fragment: fragment.Singleton(id),
     level: 0,
@@ -130,27 +133,28 @@ pub fn edge(state: State, on: EdgeId) -> Result(EdgeInfo, Nil) {
 /// Register a newly added incident edge.
 pub fn add_edge(state: State, edge: Edge) -> State {
   let peer = graph.other_node(edge, state.id)
-
-  // Retrieve existing counter if previously known, otherwise start at 0.
-  let eid = graph.edge_id(edge.u, edge.v)
-  let failures_counter = case dict.get(state.edges, eid) {
-    Ok(info) -> info.failures_counter
-    Error(_) -> 0
-  }
-
   State(
     ..state,
     edges: dict.insert(
       state.edges,
       graph.edge_id(edge.u, edge.v),
-      EdgeInfo(
-        peer:,
-        edge:,
-        status: Undecided,
-        failures_counter: failures_counter,
-      ),
+      EdgeInfo(peer:, edge:, status: Undecided),
     ),
   )
+}
+
+/// how many times this edge has failed so far.
+pub fn failure_count(state: State, on: EdgeId) -> Int {
+  case dict.get(state.failure_counts, on) {
+    Ok(k) -> k
+    Error(_) -> 0
+  }
+}
+
+/// Record one more failure of `on` and return the new count
+pub fn bump_failure_count(state: State, on: EdgeId) -> #(State, Int) {
+  let k = failure_count(state, on) + 1
+  #(State(..state, failure_counts: dict.insert(state.failure_counts, on, k)), k)
 }
 
 // --- helpers ---------------------------------------------------------------

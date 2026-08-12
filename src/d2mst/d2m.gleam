@@ -3,7 +3,8 @@ import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message.{type D2MMsg, Connect, D2MMsg, SignalConnect}
 import d2mst/node.{
   type Effect, type State, D2MNodeState, MOESearch, Reiden, Rejected, Selected,
-  Send, Sleeping, State, min_undecided_edge, opt_less, set_status,
+  Send, Sleeping, State, bump_failure_count, failure_count, min_undecided_edge,
+  opt_less, set_status,
 }
 import gleam/dict
 import gleam/list
@@ -36,12 +37,14 @@ pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
       best_wt:,
     )
 
+  // Increment the failure count for this edge
+  let #(state, k) = bump_failure_count(state, on)
+
   case info.status {
     // Tree edge: the fragment is split in two. Take the new identity
     // and propagate the failure up to the root.
     Selected -> {
-      let fragment_id =
-        fragment.D2MCore(on, Some(state.id), info.failures_counter)
+      let fragment_id = fragment.D2MCore(on, Some(state.id), k)
       on_report_failure(State(..state, fragment: fragment_id))
     }
 
@@ -365,8 +368,7 @@ fn on_connect(state: State, from: EdgeId) -> #(State, List(Effect)) {
     fragment.D2MCore(
       edge: from,
       node: None,
-      failures_counter: info.failures_counter,
-      // FIXME: where should this counter be incremented?
+      failures_counter: failure_count(state, from),
     )
   let state = State(..state, fragment: new_fragment, parent_edge: None)
 
