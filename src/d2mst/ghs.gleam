@@ -1,4 +1,4 @@
-import d2mst/fragment.{type FragmentId}
+import d2mst/fragment.{type FragmentId, GHSCore}
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message.{
   Accept, ChangeRoot, GHSMsg, Halt, Initiate, Merge, Notify, Reject, Test,
@@ -268,10 +268,28 @@ fn change_root(state: State) -> #(State, List(Effect)) {
   }
 }
 
+/// Distinguish between the two sides of a core edge by setting its `parent_edge` to
+/// `None` if it has the smaller node id, or leaving it pointing at the
+/// other side if it has the larger node id.
+fn resolve_root(state: State) -> State {
+  case state.parent_edge, state.fragment {
+    Some(j), GHSCore(edge) if edge == j -> {
+      let assert Ok(info) = dict.get(state.edges, j)
+      case state.id < info.peer {
+        True -> State(..state, parent_edge: None)
+        False -> state
+      }
+    }
+    _, _ -> state
+  }
+}
+
 fn halt(state: State) -> #(State, List(Effect)) {
+  let broadcast_except = state.parent_edge
+  let state = resolve_root(state)
   let state = State(..state, halted: True)
   let effects =
-    branch_edges_except(state, state.parent_edge)
+    branch_edges_except(state, broadcast_except)
     |> list.map(fn(eid) { Send(eid, GHSMsg(Halt)) })
   #(state, effects)
 }

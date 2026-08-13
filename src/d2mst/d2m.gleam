@@ -6,7 +6,8 @@ import d2mst/message.{
 import d2mst/node.{
   type Effect, type State, D2MNodeState, EdgeInfo, MOESearch, Merge, Reiden,
   Rejected, Selected, Send, Sleeping, State, Undecided, branch_edges_except,
-  bump_failure_count, failure_count, min_undecided_edge, opt_less, set_status,
+  bump_failure_count, defer, failure_count, min_undecided_edge, opt_less,
+  set_status,
 }
 import gleam/dict
 import gleam/list
@@ -85,7 +86,7 @@ pub fn handle_d2m_message(
         message.ReportMoe(best:) -> on_report_moe(state, on, best)
         message.SignalConnect -> on_signal_connect(state)
         message.GoSleep -> on_go_sleep(state, on)
-        message.Connect -> on_connect(state, on)
+        message.Connect -> on_connect(state, on, message_fragment_id)
       }
   }
 }
@@ -412,31 +413,39 @@ fn propagate_signal_connect(
 }
 
 /// Phase 4: a Connect arrived over an edge another fragment chose as its MOE.
-fn on_connect(state: State, from: EdgeId) -> #(State, List(Effect)) {
+fn on_connect(
+  state: State,
+  from: EdgeId,
+  msg_fragment: FragmentId,
+) -> #(State, List(Effect)) {
   let assert Ok(info) = dict.get(state.edges, from)
   // Both segments chose the same edge as their MOE
   let mutual = info.status == Selected
 
-  let new_fragment =
-    fragment.D2MCore(
-      edge: from,
-      node: None,
-      failures_counter: failure_count(state, from),
-    )
-  let state = set_status(state, from, Selected)
-  let state = State(..state, fragment: new_fragment)
-
   case mutual {
-    // One-sided merge: Become the root and re-identify both sides
-    False -> start_reiden_phase(State(..state, parent_edge: None))
+    // Not (yet) mutual: wait until this side also chooses the edge, then merge.
+    False -> #(
+      defer(state, from, message.D2MMsg(msg: Connect, fragment: msg_fragment)),
+      [],
+    )
 
-    // Both sides connected: The smaller endpoint becomes the root and starts
-    // the ReIden wave; the larger endpoint records the MOE as its parent and
-    // waits for that wave like any other child
-    True ->
+    // Both sides independently chose this edge: merge, tie-break by id. like
+    // The smaller endpoint becomes the root and starts the ReIden wave; the 
+    // larger endpoint records the MOE as its parent and waits for that wave 
+    // like any other child.
+    True -> {
+      let new_fragment =
+        fragment.D2MCore(
+          edge: from,
+          node: None,
+          failures_counter: failure_count(state, from),
+        )
+      let state = set_status(state, from, Selected)
+      let state = State(..state, fragment: new_fragment)
       case state.id < info.peer {
         True -> start_reiden_phase(State(..state, parent_edge: None))
         False -> #(State(..state, parent_edge: Some(from)), [])
       }
+    }
   }
 }

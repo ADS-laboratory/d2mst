@@ -120,7 +120,8 @@ pub fn losing_the_branch_edge_clears_the_parent_test() {
   // Node 1's parent pointer must not survive the death of the edge it
   // points at, and the failure response protocol reconnects the two
   // resulting fragments: isolated node 0 and node 1's old subtree merge back
-  // together over the surviving edge (0,2), with node 2 elected the new root.
+  // together over the surviving edge (0,2), with node 0 elected the new root
+  // (the merge tie-break favors the smaller node id).
   let sim = runner.converge(triangle())
   let assert Ok(before) = runner.state(sim, 1)
   assert before.parent_edge == Some(EdgeId(0, 1))
@@ -130,6 +131,6 @@ pub fn losing_the_branch_edge_clears_the_parent_test() {
   assert after.parent_edge == Some(EdgeId(1, 2))
   assert node.branch_edges_except(after, Some(EdgeId(1, 2))) == []
 
-  let assert Ok(root) = runner.state(sim, 2)
+  let assert Ok(root) = runner.state(sim, 0)
   assert root.parent_edge == None
 }
