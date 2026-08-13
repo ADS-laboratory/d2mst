@@ -411,29 +411,32 @@ fn propagate_signal_connect(
   }
 }
 
+/// Phase 4: a Connect arrived over an edge another fragment chose as its MOE.
 fn on_connect(state: State, from: EdgeId) -> #(State, List(Effect)) {
-  // Mark the MOE as a tree edge.
-  let state = set_status(state, from, Selected)
-
-  // New FragmentId with MOE as the new core.
   let assert Ok(info) = dict.get(state.edges, from)
+  // Both segments chose the same edge as their MOE
+  let mutual = info.status == Selected
+
   let new_fragment =
     fragment.D2MCore(
       edge: from,
       node: None,
       failures_counter: failure_count(state, from),
     )
-  let state = State(..state, fragment: new_fragment, parent_edge: None)
+  let state = set_status(state, from, Selected)
+  let state = State(..state, fragment: new_fragment)
 
-  // Deterministically elect a single root.
-  let is_new_root = state.id == from.high
+  case mutual {
+    // One-sided merge: Become the root and re-identify both sides
+    False -> start_reiden_phase(State(..state, parent_edge: None))
 
-  case is_new_root {
-    // Designated Root: parent_edge stays None
+    // Both sides connected: The smaller endpoint becomes the root and starts
+    // the ReIden wave; the larger endpoint records the MOE as its parent and
+    // waits for that wave like any other child
     True ->
-      State(..state, fragment: new_fragment, parent_edge: None)
-      |> start_reiden_phase
-    // Non-Root Endpoint: point parent_edge across the MOE to the new root
-    False -> #(State(..state, parent_edge: Some(from)), [])
+      case state.id < info.peer {
+        True -> start_reiden_phase(State(..state, parent_edge: None))
+        False -> #(State(..state, parent_edge: Some(from)), [])
+      }
   }
 }
