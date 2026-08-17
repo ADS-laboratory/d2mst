@@ -226,11 +226,16 @@ remain in the XOR.
 \end{itemize}
 
 In particular, each edge $e = (u,v)$ is assigned a symmetric unique identifier
-$\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$. Each node computes the XOR of the identifiers of its incident edges whose weights fall in $[a,b]$:
+$\mathrm{id}(e) = \bigl(\min(u,v),\,\max(u,v)\bigr)$, and $H$ denotes a hash function
+mapping identifiers to a uniformly-distributed $m$-bit integer (the same $H$ reused for
+priority sampling below). Each node computes the XOR of the \emph{hashed} identifiers of
+its incident edges whose weights fall in $[a,b]$:
 $$
-x_v = \bigoplus_{e \in \delta(v) \land w(e) \in [a,b]} \mathrm{id}(e)
+x_v = \bigoplus_{e \in \delta(v) \land w(e) \in [a,b]} H(\mathrm{id}(e))
 $$
-where $\delta(v)$ is the set of edges incident to $v$.
+where $\delta(v)$ is the set of edges incident to $v$. Hashing rather than XORing the raw
+identifier is what keeps accidental cancellations between distinct outgoing edges
+negligible (see \emph{Collisions} below).
 
 The root collects the $x_v$ values from all nodes in the fragment and aggregates:
 $$
@@ -243,23 +248,23 @@ exists.
 This procedure is just a broadcast (of the interval) followed by an echo (of the local XOR
 values), and therefore costs $O(N)$ messages.
 
-\begin{comment}
-\smallskip % Collisions do not happen anymore since now we arn't using an hash function, right?
-\noindent\emph{Collisions:} The XOR test has no false positives: if $X \neq 0$ then at
-least one outgoing edge exists in the interval. However, it may have false negatives if
-two or more outgoing edges exist in the interval and their identifiers happen to cancel
+\smallskip
+\noindent\emph{Collisions.} The XOR test has no false positives: if $X \neq 0$ then at
+least one outgoing edge exists in the interval. However, it can have false negatives if 
+two or more outgoing edges exist in the interval and their hashed identifiers happen to cancel
 out in the XOR.
-For a non-empty set $S$ of outgoing edges with independent m-bit hash values,
+For a non-empty set $S$ of outgoing edges with independent $m$-bit hash values,
 \[
-  \Pr\!\left[\bigoplus_{e \in S} h_{\mathrm{xor}}(e) = 0\right]
+  \Pr\!\left[\bigoplus_{e \in S} H(\mathrm{id}(e)) = 0\right]
   \;=\; 2^{-m}
 \]
 
 This follows because the XOR of independent, uniformly distributed $m$-bit
 values is itself uniformly distributed over the $2^m$ possible bit patterns.
 Therefore the aggregate hash is equally likely to be any $m$-bit string, and
-the probability of obtaining the all-zero value is exactly $1/2^m$.
-\end{comment}
+the probability of obtaining the all-zero value is exactly $1/2^m$. Choosing $m$
+large enough (e.g. 64 bits) makes this probability negligible for any fragment size
+this project deals with.
 
 \medskip
 
@@ -282,14 +287,14 @@ minimum-weight outgoing edge.
  
     \item \textbf{Estimate the median.}
         The root broadcasts the current interval $[a,b]$. Each node $v$ assigns a
-        \emph{priority} to each of its incident non-tree edges $e$ whose weight falls in
+        \emph{priority} to each of its incident non-tree edges $e$ whose key falls in
         $[a,b]$:
         \[
             \mathrm{priority}(e)
             \;=\;
             H\!\left(\mathrm{id}(e)\right),
         \]
-        where $H$ is an hash function.
+        using the same hash function $H$ introduced above for TestOut.
 
         Each node retains only the $k$ edges with the \emph{smallest} priority values,
         discarding all others. Because the hash function $H$ acts as a random oracle,
@@ -301,7 +306,7 @@ minimum-weight outgoing edge.
         received from its children, deduplicates them by edge identifier, and forwards the
         $k$ globally smallest priorities to its parent.
         The root collects $k$ uniformly random non-tree edges from across the fragment;
-        the \textbf{median of their weights} is used as the split point $m$.
+        the \textbf{median of their keys} is used as the split point $m$.
         Because this procedure consists of a single broadcast followed by a convergecast
         carrying at most $k$ (a constant) items per message, it requires $\mathcal{O}(N)$
         message complexity.
@@ -311,13 +316,13 @@ minimum-weight outgoing edge.
         representing whether a sampled edge falls below a given population quantile. This
         bounds the probability of the sample median deviating from the true median.}, the
         probability that the sample median falls outside the $[1/4, 3/4]$ quantile range
-        of the true edge weights is bounded by $2\exp(-k/8)$.
+        of the true edge keys is bounded by $2\exp(-k/8)$.
 
         Thus, for a sufficiently large constant $k$, the chosen split point $m$ shrinks
         the search space by a constant fraction with high constant probability. Over the
         course of the algorithm, this makes the interval shrink to a single edge in
         $\mathcal{O}(\log N)$ expected rounds.
- 
+
     \item \textbf{Test both halves.}
           Run \textsc{TestOut} on $[a,m]$ and $(m,b]$. The root narrows the search to
           the \emph{lighter} sub-interval that contains at least one outgoing edge:
@@ -330,12 +335,12 @@ minimum-weight outgoing edge.
           \]
  
     \item \textbf{Iterate.}
-          For the new interval $[a,b]$, we iterate the algorithm by computing the new median and splitting the interval again. Because the interval strictly shrinks at each step, it eventually collapses to a single weight value $a = b = w^*$, which uniquely identifies the MOE weight.
- 
+          For the new interval $[a,b]$, we iterate the algorithm by computing the new median and splitting the interval again. Because the interval strictly shrinks at each step, it eventually collapses to a single key value $a = b = k^*$.
+
     \item \textbf{Identify the edge.}
-          When $a = b = w^*$, the root broadcasts the id of the edge with weight $w^*$. % (belonging to its list of k edges arrived to root).
+          When $a = b = w^*$, the root broadcasts the id of the edge with weight $w^*$.
           The endpoint $p$ of that edge in the fragment holds the MOE.
- 
+
 \end{enumerate}
 
 \paragraph{Phase 4. Fragment merge.}
@@ -354,7 +359,7 @@ identity are silently discarded, and the most recent failure or addition initiat
 protocol round with a fresh identity.
 
 \paragraph{Complexity.}
-We already argued that TestOut and the median approximation protocols have $O(N)$ message complexity. In the average case, the binary search over the edges requires $O(\log N)$ iterations to converge to a single weight value. Therefore, the overall message complexity of the binary search approach is $O(N \log N)$ in the average case. Each message carries a constant number of identifiers and weights, so the message size is $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight.
+We already argued that TestOut and the median approximation protocols have $O(N)$ message complexity. In the average case, the binary search over the edges requires $O(\log N)$ iterations to converge to a single key value. Therefore, the overall message complexity of the binary search approach is $O(N \log N)$ in the average case. Each message carries a constant number of identifiers, weights, or the packed $(w(e), \mathrm{id}(e))$ keys described above, so the message size is still $O(\log ID + \log W)$ bits where $ID$ is the maximum node identifier and $W$ is the maximum edge weight — packing weight and id together does not change this bound, only the constant factor.
 %TODO: say something on the memory used by each node
 
 \subsubsection{Addition response protocol}

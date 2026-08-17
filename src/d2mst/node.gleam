@@ -33,6 +33,19 @@ pub type D2MNodeState {
   Merge
 }
 
+/// Which Phase 3 (minimum outgoing edge search) procedure a node runs.
+pub type MoeStrategy {
+  Naive
+  /// `sample_k`: number of edges sampled at each round in order to estimate
+  /// the median
+  BinarySearch(sample_k: Int)
+}
+
+pub fn sample_k(state: State) -> Int {
+  let assert BinarySearch(k) = state.moe_strategy
+  k
+}
+
 pub type NodeState {
   Sleeping
   GHSNodeState(state: GHSNodeState)
@@ -74,6 +87,15 @@ pub type State {
     repair_countdown: Int,
     halted: Bool,
     pending: List(#(EdgeId, message.Msg)),
+    /// Which Phase 3 procedure this node runs; fixed at `init`.
+    moe_strategy: MoeStrategy,
+    /// Scratch space for the `BinarySearch` strategy only, reset at the
+    /// start of every round. `bs_scan` accumulates replies to the search's
+    /// initial whole-fragment `BsRound`; `bs_left`/`bs_right` accumulate
+    /// the two halves of a `BsSplit` round.
+    bs_scan: message.BsScan,
+    bs_left: message.BsScan,
+    bs_right: message.BsScan,
   )
 }
 
@@ -96,8 +118,19 @@ pub type Effect {
   Send(on: EdgeId, msg: message.Msg)
 }
 
-/// `incident` lists the graph edges this node is an endpoint of.
+/// `incident` lists the graph edges this node is an endpoint of. Runs
+/// Phase 3's naive MOE search; use `init_with_strategy` to opt into the
+/// binary search variant.
 pub fn init(id: NodeId, incident: List(Edge)) -> State {
+  init_with_strategy(id, incident, Naive)
+}
+
+/// Like `init`, but picks which Phase 3 procedure the node runs.
+pub fn init_with_strategy(
+  id: NodeId,
+  incident: List(Edge),
+  moe_strategy: MoeStrategy,
+) -> State {
   let edges =
     list.fold(incident, dict.new(), fn(d, e) {
       let peer = graph.other_node(e, id)
@@ -122,6 +155,10 @@ pub fn init(id: NodeId, incident: List(Edge)) -> State {
     repair_countdown: 0,
     halted: False,
     pending: [],
+    moe_strategy:,
+    bs_scan: message.bs_scan_zero,
+    bs_left: message.bs_scan_zero,
+    bs_right: message.bs_scan_zero,
   )
 }
 

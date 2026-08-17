@@ -45,6 +45,20 @@ pub fn edge_less(a: Edge, b: Edge) -> Bool {
   compare_edge(a, b) == order.Lt
 }
 
+pub fn edge_min(a: Edge, b: Edge) -> Edge {
+  case edge_less(a, b) {
+    True -> a
+    False -> b
+  }
+}
+
+pub fn edge_max(a: Edge, b: Edge) -> Edge {
+  case edge_less(a, b) {
+    True -> b
+    False -> a
+  }
+}
+
 pub type Graph {
   Graph(nodes: List(NodeId), edges: List(Edge))
 }

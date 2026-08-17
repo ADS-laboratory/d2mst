@@ -26,11 +26,21 @@ pub type Sim {
   )
 }
 
-/// A network of sleeping nodes wired to `g`.
+/// A network of sleeping nodes wired to `g`. Every node runs the naive
+/// Phase 3 MOE search; use `new_with_strategy` to pick a different one.
 pub fn new(g: Graph) -> Sim {
+  new_with_strategy(g, node.Naive)
+}
+
+/// Like `new`, but every node runs `moe_strategy`'s Phase 3 procedure.
+pub fn new_with_strategy(g: Graph, moe_strategy: node.MoeStrategy) -> Sim {
   let states =
     list.fold(g.nodes, dict.new(), fn(d, n) {
-      dict.insert(d, n, node.init(n, graph.incident(g, n)))
+      dict.insert(
+        d,
+        n,
+        node.init_with_strategy(n, graph.incident(g, n), moe_strategy),
+      )
     })
   Sim(graph: g, states:, queue: [])
 }
@@ -64,6 +74,11 @@ pub fn settle(sim: Sim) -> Sim {
 /// The common case: build, wake everything, run to quiescence.
 pub fn converge(g: Graph) -> Sim {
   new(g) |> wake_all |> settle
+}
+
+/// Like `converge`, but every node runs `moe_strategy`'s Phase 3 procedure.
+pub fn converge_with_strategy(g: Graph, moe_strategy: node.MoeStrategy) -> Sim {
+  new_with_strategy(g, moe_strategy) |> wake_all |> settle
 }
 
 pub fn state(sim: Sim, n: NodeId) -> Result(node.State, Nil) {

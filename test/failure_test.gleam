@@ -1,9 +1,12 @@
 import d2mst/graph
+import d2mst/node
 import gleam/list
 import gleeunit/should
 import sim/generator.{connected}
 import sim/oracle.{check}
-import sim/runner.{converge, fail_link, settle, summaries}
+import sim/runner.{
+  converge, converge_with_strategy, fail_link, settle, summaries,
+}
 
 pub fn single_link_failure_recovery_test() {
   let g = connected(123, 5, 50)
@@ -52,6 +55,22 @@ pub fn sequential_link_failures_recovery_test() {
 
   let sim2 = fail_link(sim1, edge2.u, edge2.v) |> settle
   check(sim2.graph, summaries(sim2)) |> should.be_ok
+}
+
+pub fn binary_search_repair_with_custom_sample_k_test() {
+  let g = connected(77, 8, 40)
+
+  // Every node runs the BinarySearch Phase 3 procedure with a non-default sample_k
+  let sim = converge_with_strategy(g, node.BinarySearch(sample_k: 3))
+  check(sim.graph, summaries(sim)) |> should.be_ok
+
+  let assert [target_edge_id, ..] =
+    list.flatten(list.map(summaries(sim), fn(summary) { summary.tree_edges }))
+  let assert Ok(target_edge) = graph.find_edge(sim.graph, target_edge_id)
+
+  let sim_recovered = fail_link(sim, target_edge.u, target_edge.v) |> settle
+
+  check(sim_recovered.graph, summaries(sim_recovered)) |> should.be_ok
 }
 
 pub fn fuzz_multiple_topologies_test() {
