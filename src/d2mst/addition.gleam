@@ -3,7 +3,7 @@ import d2mst/graph.{type Edge, type EdgeId, type NodeId}
 import d2mst/message.{type AddMsg, add_is_intra_fragment}
 import d2mst/node.{
   type EdgeInfo, type Effect, type State, EdgeInfo, Selected, Send, State,
-  Undecided,
+  Undecided, defer,
 }
 import gleam/dict
 import gleam/option.{type Option, None, Some}
@@ -121,8 +121,16 @@ fn on_edge_test(
           }
         }
         False -> {
-          // Case 2: A failure response is in progress.
-          todo()
+          // Case 2: A failure response is in progress, defer the message. Some time in
+          // the future we will be in the True branch above.
+          #(
+            defer(
+              state,
+              eid,
+              message.AddMsg(message.AddTest, fragment: state.fragment),
+            ),
+            [],
+          )
         }
       }
     }
