@@ -1,7 +1,7 @@
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message.{
-  type D2MMsg, Connect, D2MMsg, SignalConnect, is_intra_fragment,
+  type D2MMsg, Connect, D2MMsg, SignalConnect, fail_is_intra_fragment,
 }
 import d2mst/node.{
   type Effect, type State, BinarySearch, D2MNodeState, EdgeInfo, MOESearch,
@@ -22,7 +22,7 @@ pub fn handle_d2m_message(
   msg: D2MMsg,
   message_fragment_id: FragmentId,
 ) -> #(State, List(Effect)) {
-  case is_intra_fragment(msg) && message_fragment_id != state.fragment {
+  case fail_is_intra_fragment(msg) && message_fragment_id != state.fragment {
     // A superseded round gets silently discarded
     True -> #(state, [])
     False ->
