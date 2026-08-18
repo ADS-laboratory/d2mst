@@ -1,7 +1,7 @@
 //// Wire-level protocol messages exchanged between nodes over links.
 
 import d2mst/fragment.{type FragmentId}
-import d2mst/graph.{type Edge, type EdgeId}
+import d2mst/graph.{type Edge, type EdgeId, type NodeId}
 import gleam/option.{type Option, None}
 
 /// GHS protocol messages. `Notify(None)` means "no outgoing edge found"
@@ -70,6 +70,36 @@ pub type D2MMsg {
   GoSleep
 }
 
+pub type AddMsg {
+  AddTest
+
+  /// Sent to the root to request merging a partitioned network.
+  AddRequestMergePartition(add_edge: EdgeId)
+  /// Sent by the root to authorize the endpoint to execute the merge.
+  AddApproveMergePartition(add_edge: EdgeId)
+
+  /// Sent upward by both endpoints u and v toward the root.
+  Addition(
+    event_id: EdgeId,
+    new_weight: Int,
+    origin: NodeId,
+    running_max: Int,
+    max_edge: EdgeId,
+  )
+
+  /// Dispatched by LCA to prune the heaviest edge and update tree direction[cite: 20].
+  Replace(
+    event_id: EdgeId,
+    target_origin: NodeId,
+    max_weight: Int,
+    max_edge: EdgeId,
+    reversing: Bool,
+  )
+
+  /// Token sent by the root to serialize overlapping additions[cite: 20].
+  Privilege(event_id: EdgeId)
+}
+
 pub type Msg {
   // Plain GHS messages used to build the initial MST.
   GHSMsg(msg: GHSMsg)
@@ -77,6 +107,8 @@ pub type Msg {
   // a monotonic round counter and discard messages with a lower round than
   // the last one it received.
   D2MMsg(msg: D2MMsg, fragment: FragmentId)
+
+  AddMsg(msg: AddMsg, fragment: FragmentId)
 }
 
 /// What a link delivers to an endpoint node: the protocol message together
@@ -91,7 +123,7 @@ pub type Delivery {
 ///   the receiver old identity
 /// - `ProbeEdge` / `ProbeReply` / `Connect` cross the fragment boundary by
 ///   design
-pub fn is_intra_fragment(msg: D2MMsg) -> Bool {
+pub fn fail_is_intra_fragment(msg: D2MMsg) -> Bool {
   case msg {
     ReIdenAck
     | ProbeMoe
@@ -105,5 +137,16 @@ pub fn is_intra_fragment(msg: D2MMsg) -> Bool {
     | GoSleep -> True
 
     ReportFailure(..) | ReIden | ProbeEdge | ProbeReply(..) | Connect -> False
+  }
+}
+
+pub fn add_is_intra_fragment(msg: AddMsg) -> Bool {
+  case msg {
+    AddRequestMergePartition(..)
+    | AddApproveMergePartition(..)
+    | Addition(..) -> True
+    AddTest -> False
+    Replace(..) -> todo
+    Privilege(..) -> todo
   }
 }

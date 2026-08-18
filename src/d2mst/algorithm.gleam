@@ -1,9 +1,9 @@
+import d2mst/addition.{add_edge, handle_add_message}
 import d2mst/d2m.{handle_d2m_message, remove_edge}
 import d2mst/ghs.{handle_ghs_message, wakeup}
 import d2mst/message
 import d2mst/node.{
   type Effect, type Event, type State, LinkDown, LinkUp, Receive, State, Wakeup,
-  add_edge,
 }
 import gleam/dict
 import gleam/list
@@ -46,7 +46,7 @@ fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
     Wakeup -> wakeup(state)
     // TODO: wakeup should be shared between protocols?
     // TODO: the addition response protocol starts here.
-    LinkUp(edge) -> #(add_edge(state, edge), [])
+    LinkUp(edge) -> add_edge(state, edge)
     // TODO: the failure response protocol starts here
     LinkDown(on) -> remove_edge(state, on)
     Receive(on, msg) ->
@@ -57,6 +57,8 @@ fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
             message.GHSMsg(msg) -> handle_ghs_message(state, on, msg)
             message.D2MMsg(msg, fragment_id) ->
               handle_d2m_message(state, on, msg, fragment_id)
+            message.AddMsg(msg, fragment_id) ->
+              handle_add_message(state, on, msg, fragment_id)
           }
       }
   }

@@ -96,6 +96,8 @@ pub type State {
     bs_scan: message.BsScan,
     bs_left: message.BsScan,
     bs_right: message.BsScan,
+    /// Pending additions, waiting for the other branch to arrive at the LCA.
+    pending_additions: Dict(EdgeId, #(message.AddMsg, EdgeId)),
   )
 }
 
@@ -159,6 +161,7 @@ pub fn init_with_strategy(
     bs_scan: message.bs_scan_zero,
     bs_left: message.bs_scan_zero,
     bs_right: message.bs_scan_zero,
+    pending_additions: dict.new(),
   )
 }
 
