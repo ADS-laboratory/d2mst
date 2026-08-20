@@ -1,3 +1,5 @@
+//// Addition response protocol (Tier 3).
+
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId, type NodeId}
 import d2mst/message.{type AddMsg, add_is_intra_fragment}
@@ -176,6 +178,7 @@ fn on_edge_test(
                   case state.parent_edge {
                     // If we are the root, we can merge the two fragments
                     // directly.
+                    // TODO: what if there is already a addition in progress? Could happen? Should we check?
                     None -> merge(state, eid, info, [])
                     // Otherwise, we ask the root to authorize the merge.
                     Some(parent_edge) -> {
@@ -310,6 +313,7 @@ fn merge(
       let updated_info = EdgeInfo(..edge_info, status: Selected)
       let state =
         State(..state, edges: dict.insert(state.edges, edge_id, updated_info))
+      // TODO: is it ok to use the failure connect logic?
       let envelope =
         message.D2MMsg(msg: message.Connect, fragment: state.fragment)
       #(state, [Send(edge_id, envelope), ..effects])
@@ -895,8 +899,6 @@ fn broadcast_to_tree(
       Some(ignore_eid) -> eid == ignore_eid
       None -> False
     }
-
-    // Notice we use `Selected` here to match your struct instead of `Branch`
     case info.status == Selected && !should_ignore {
       True -> [Send(eid, msg), ..effects]
       False -> effects
