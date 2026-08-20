@@ -7,7 +7,7 @@ import d2mst/node.{
   type Effect, type State, BinarySearch, D2MNodeState, EdgeInfo, MOESearch,
   Merge, Naive, Reiden, Rejected, Selected, Send, Sleeping, State, Undecided,
   branch_edges_except, bump_failure_count, defer, failure_count,
-  min_undecided_edge, opt_less, sample_k, set_status,
+  min_undecided_edge, opt_less, sample_k, set_confirmed, set_status,
 }
 import gleam/crypto
 import gleam/dict
@@ -147,6 +147,23 @@ fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
       ..state,
       ns: D2MNodeState(Reiden),
       repair_countdown: list.length(children),
+      // A repair is now in progress: `addition.on_edge_test` reads this to
+      // tell a stable fragment from one mid-recovery.
+      halted: False,
+      // The fragment identity is about to change, so every addition
+      // message in flight under the old one will be silently discarded
+      // wherever it lands (see `message.add_is_intra_fragment`) -- any
+      // coordination state tied to it is dead. Clear it now rather than
+      // leaving it stale: in particular `addition_active`/`addition_queue`
+      // must not survive, or this node (if it stays root) would never
+      // grant the next event a turn once its stuck predecessor's `AddDone`
+      // never arrives.
+      pending_additions: dict.new(),
+      turn_routing: dict.new(),
+      ready_replace: dict.new(),
+      replace_wait_countdown: dict.new(),
+      addition_queue: [],
+      addition_active: None,
     )
 
   case children {
@@ -584,7 +601,14 @@ fn bs_scan(state: State, in_range: fn(Edge) -> Bool) -> message.BsScan {
       int.bitwise_exclusive_or(acc, edge_hash(pair.0))
     })
 
-  let candidates = list.filter(kept, fn(pair) { pair.1.status != Selected })
+  // `via_addition` edges are excluded the same way `min_undecided_edge`
+  // excludes them for the naive strategy: they are driven exclusively by
+  // the addition protocol, and must not be claimed as an ordinary MOE
+  // candidate by a concurrent, unrelated repair's scan.
+  let candidates =
+    list.filter(kept, fn(pair) {
+      pair.1.status != Selected && !pair.1.via_addition
+    })
 
   let bounds =
     list.fold(candidates, None, fn(acc, pair) {
@@ -788,6 +812,13 @@ fn on_connect(
           failures_counter: failure_count(state, from),
         )
       let state = set_status(state, from, Selected)
+      // Both sides have now both sent *and* received a `Connect` for this
+      // edge: mark it mutually confirmed (see `EdgeInfo.confirmed`). This
+      // is what lets `addition.on_edge_test` tell "I've decided but am
+      // still waiting to hear back" (status Selected, not yet confirmed --
+      // keep nudging a peer that may have never gotten its own chance to
+      // decide) apart from "fully done" (confirmed -- ignore stray retries).
+      let state = set_confirmed(state, from)
       let state = State(..state, fragment: new_fragment)
       case state.id < info.peer {
         True -> start_reiden_phase(State(..state, parent_edge: None))
@@ -800,24 +831,66 @@ fn on_connect(
 /// Root broadcasts GoSleep down the tree: no outgoing edge exists anywhere
 /// in the fragment, so there is nothing left to search for.
 fn enter_sleep(state: State) -> #(State, List(Effect)) {
-  let state = State(..state, ns: Sleeping)
+  let state = State(..state, ns: Sleeping, halted: True)
   let effects =
     branch_children(state)
     |> list.map(fn(eid) {
       Send(eid, D2MMsg(msg: message.GoSleep, fragment: state.fragment))
     })
-  #(state, effects)
+  #(state, list.append(effects, retry_abandoned_additions(state)))
 }
 
 /// A GoSleep broadcast from the root: enter the terminal state, pass it on.
 fn on_go_sleep(state: State, from: EdgeId) -> #(State, List(Effect)) {
-  let state = State(..state, ns: Sleeping)
+  let state = State(..state, ns: Sleeping, halted: True)
   let effects =
     branch_edges_except(state, Some(from))
     |> list.map(fn(eid) {
       Send(eid, D2MMsg(msg: message.GoSleep, fragment: state.fragment))
     })
-  #(state, effects)
+  #(state, list.append(effects, retry_abandoned_additions(state)))
+}
+
+/// A concurrent failure can interrupt an addition round mid-flight: its
+/// fragment identity changes underneath it, so every in-flight
+/// `AddRequestTurn`/`Privilege`/`Replace` message for it gets silently
+/// discarded by the mismatch check the moment it crosses a node that has
+/// already re-identified, and nothing else re-drives it (see
+/// `EdgeInfo.via_addition`). Once this node is quiescent again, re-probe
+/// every such edge fresh.
+///
+/// Checking `status != Selected` rather than `== Undecided`: the repair
+/// this node just went through also runs its own Phase 3 MOE search, which
+/// treats an abandoned addition's edge as an ordinary candidate like any
+/// other and, if both endpoints ended up in the same fragment again, marks
+/// it `Rejected` before we ever get a chance to retry it -- which would
+/// otherwise permanently hide it from this check. This also re-probes
+/// additions that legitimately resolved as a no-op (status left as
+/// whatever it was, not `Selected`, by design). That used to be able to
+/// resurrect a stale `pending_additions[eid]` entry left behind by the
+/// no-op path; `addition.on_replace` now clears that bookkeeping
+/// unconditionally (see `message.Replace`'s `should_prune` field), which
+/// closes that specific case. A related gap is still open, though: a round
+/// abandoned *before* ever reaching its LCA (discarded mid-climb by a
+/// concurrent re-identification, rather than resolved as a no-op) leaves
+/// `pending_additions` entries stranded at whatever relay nodes it had
+/// already passed through, and nothing currently revisits those -- only the
+/// edge's own two endpoints get re-probed here. Confirmed reproducible
+/// (`failure_test.fuzz_long_running_random_topology_test`, seed 1) but not
+/// yet root-caused: the re-probe from this function does resolve the
+/// retried edge correctly and no false-LCA match has been observed, so the
+/// resulting wrong tree traces to something else in that path, still
+/// uncharacterized.
+fn retry_abandoned_additions(state: State) -> List(Effect) {
+  dict.to_list(state.edges)
+  |> list.filter_map(fn(pair) {
+    let #(eid, info) = pair
+    case info.via_addition && info.status != Selected {
+      True ->
+        Ok(Send(eid, message.AddMsg(message.AddTest, fragment: state.fragment)))
+      False -> Error(Nil)
+    }
+  })
 }
 
 // --------------------------------------------- //

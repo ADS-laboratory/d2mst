@@ -314,10 +314,17 @@ fn at(items: List(a), i: Int) -> Result(a, Nil) {
 /// Fire one random topology event: fail a link, add a link, join a new
 /// isolated node, or crash a node (kept rare enough to leave >4 nodes
 /// alive, so the run has something left to keep mutating).
+///
+/// Draws the branch out of 7, not 4: `generator.next`'s LCG has a
+/// power-of-2 modulus, so its low bits are degenerate (mod 4 of the raw
+/// state only ever advances by a fixed +1 per draw, and every branch here
+/// consumes a multiple of 4 draws of its own, so `rand_below(seed, 4)`
+/// landed on the same branch for 40 events straight before this was
+/// changed). 7 is coprime to the modulus and mixes far better.
 fn random_event(sim: Sim, seed: Int, next_id: Int) -> #(Sim, Int, Int) {
-  let #(pick, seed) = generator.rand_below(seed, 4)
+  let #(pick, seed) = generator.rand_below(seed, 7)
   case pick {
-    0 ->
+    0 | 1 ->
       case sim.graph.edges {
         [] -> #(sim, seed, next_id)
         edges -> {
@@ -326,8 +333,7 @@ fn random_event(sim: Sim, seed: Int, next_id: Int) -> #(Sim, Int, Int) {
           #(fail_link(sim, e.u, e.v), seed, next_id)
         }
       }
-    // TODO: Only deletion works for now, so the add_link/add_node branch is disabled until that is fixed.
-    _ ->
+    2 | 3 ->
       case list.length(sim.graph.nodes) > 4 {
         False -> #(sim, seed, next_id)
         True -> {
@@ -337,7 +343,7 @@ fn random_event(sim: Sim, seed: Int, next_id: Int) -> #(Sim, Int, Int) {
           #(crash_node(sim, n), seed, next_id)
         }
       }
-    2 -> {
+    4 | 5 -> {
       let nodes = sim.graph.nodes
       let #(u_idx, seed) = generator.rand_below(seed, list.length(nodes))
       let #(v_idx, seed) = generator.rand_below(seed, list.length(nodes))

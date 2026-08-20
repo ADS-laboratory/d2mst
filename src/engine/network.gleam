@@ -69,13 +69,17 @@ pub fn wake_all(net: Network) -> Nil {
 // process-free runtime.
 
 /// Add an isolated node to the running network. It starts with no incident
-/// edges; `add_link` is what connects it to the rest of the network.
+/// edges; `add_link` is what connects it to the rest of the network. Woken
+/// immediately: `ghs.wakeup` already treats a node with no edges as a
+/// complete, halted MST on its own, but only once it actually wakes, and
+/// nothing else will ever wake a node nobody has linked to yet.
 pub fn add_node(net: Network, n: NodeId) -> Network {
   case dict.has_key(net.nodes, n) {
     True -> net
     False -> {
       let h = node_actor.start(n, [], net.logger)
       process.send(h.control, node_actor.Attach(dict.new()))
+      process.send(h.control, node_actor.Wake)
       Network(
         ..net,
         graph: graph.add_node(net.graph, n),
@@ -108,17 +112,29 @@ pub fn crash_node(net: Network, n: NodeId) -> Network {
 /// both endpoint nodes. A previously failed edge that comes back is simply
 /// added again — at the protocol level it is a new edge. Both endpoints must
 /// already be in the network.
+/// A no-op if the edge already has a live link: `LinkUp` means "this edge
+/// is new", and the pure protocol (`algorithm.gleam`'s `LinkUp` handler)
+/// blindly overwrites whatever `EdgeInfo` it already holds for the id, so
+/// re-attaching a still-live edge would silently reset a tree edge's status
+/// without going through any repair. Re-adding a *failed* edge is fine and
+/// expected -- `fail_link` already removed its entry from `net.links`.
 pub fn add_link(net: Network, e: Edge) -> Network {
-  let assert Ok(hu) = dict.get(net.nodes, e.u)
-  let assert Ok(hv) = dict.get(net.nodes, e.v)
-  let l = link.start(e, endpoint(hu), endpoint(hv))
-  process.send(hu.control, node_actor.AttachEdge(e, l))
-  process.send(hv.control, node_actor.AttachEdge(e, l))
-  Network(
-    ..net,
-    graph: graph.add_edge(net.graph, e),
-    links: dict.insert(net.links, graph.edge_id(e.u, e.v), l),
-  )
+  let eid = graph.edge_id(e.u, e.v)
+  case dict.has_key(net.links, eid) {
+    True -> net
+    False -> {
+      let assert Ok(hu) = dict.get(net.nodes, e.u)
+      let assert Ok(hv) = dict.get(net.nodes, e.v)
+      let l = link.start(e, endpoint(hu), endpoint(hv))
+      process.send(hu.control, node_actor.AttachEdge(e, l))
+      process.send(hv.control, node_actor.AttachEdge(e, l))
+      Network(
+        ..net,
+        graph: graph.add_edge(net.graph, e),
+        links: dict.insert(net.links, eid, l),
+      )
+    }
+  }
 }
 
 /// Delete an edge: kill its link process. Both endpoint nodes observe the

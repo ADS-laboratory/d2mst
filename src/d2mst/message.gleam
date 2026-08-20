@@ -88,17 +88,43 @@ pub type AddMsg {
   )
 
   /// Dispatched by LCA to prune the heaviest edge and update tree direction[cite: 20].
+  /// `should_prune: False` still travels the full routing path (every
+  /// intermediate node clears its `pending_additions` entry for
+  /// `event_id`, same as the pruning case) but touches no edge status and
+  /// never reverses a parent pointer: a no-op decision still needs its
+  /// stale routing state cleaned up, or a later re-probe of the same edge
+  /// id could mistake a leftover entry for an in-progress round.
   Replace(
     event_id: EdgeId,
     target_origin: NodeId,
     max_weight: Int,
     max_edge: EdgeId,
     reversing: Bool,
+    should_prune: Bool,
   )
-  AddConfirm(event_id: EdgeId)
 
-  /// Token sent by the root to serialize overlapping additions[cite: 20].
+  /// Sent by an LCA once both `Addition` branches converged on it, up
+  /// toward the root, so the root can serialize it against other
+  /// concurrently-converging additions (report ch. 3, "Overlapping cycles
+  /// serialization"). Deliberately a distinct message from `Addition`
+  /// rather than a continuation of it: from a relaying node's own local
+  /// view, "first `Addition` for this event, forward it up" is
+  /// indistinguishable between "I might be the LCA, wait for a sibling"
+  /// and "the LCA further down already resolved this, I'm just relaying
+  /// its request" -- the message type is what tells them apart.
+  AddRequestTurn(event_id: EdgeId)
+
+  /// Token sent by the root down to the LCA (and only the LCA -- routing
+  /// stops there, see `addition.execute_or_route`) authorizing it to act
+  /// on the decision it already computed.
   Privilege(event_id: EdgeId)
+
+  /// Sent by whichever node finishes a `Replace` chain (winning or losing
+  /// branch), up the standing (possibly just-reversed) parent chain. The
+  /// LCA that coordinated the event counts these down to know when to
+  /// report completion to the root; every other node just relays it
+  /// upward.
+  AddDone(event_id: EdgeId)
 }
 
 pub type Msg {
@@ -146,9 +172,10 @@ pub fn add_is_intra_fragment(msg: AddMsg) -> Bool {
     AddRequestMergePartition(..)
     | AddApproveMergePartition(..)
     | Addition(..)
-    | AddConfirm(..) -> True
+    | Replace(..)
+    | AddRequestTurn(..)
+    | Privilege(..)
+    | AddDone(..) -> True
     AddTest -> False
-    Replace(..) -> todo
-    Privilege(..) -> todo
   }
 }
