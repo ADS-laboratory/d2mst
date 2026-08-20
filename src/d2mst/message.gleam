@@ -95,6 +95,7 @@ pub type AddMsg {
     max_edge: EdgeId,
     reversing: Bool,
   )
+  AddConfirm(event_id: EdgeId)
 
   /// Token sent by the root to serialize overlapping additions[cite: 20].
   Privilege(event_id: EdgeId)
@@ -144,7 +145,8 @@ pub fn add_is_intra_fragment(msg: AddMsg) -> Bool {
   case msg {
     AddRequestMergePartition(..)
     | AddApproveMergePartition(..)
-    | Addition(..) -> True
+    | Addition(..)
+    | AddConfirm(..) -> True
     AddTest -> False
     Replace(..) -> todo
     Privilege(..) -> todo

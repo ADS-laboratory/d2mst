@@ -1,3 +1,5 @@
+//// Addition response protocol (Tier 3).
+
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId, type NodeId}
 import d2mst/message.{type AddMsg, add_is_intra_fragment}
@@ -69,6 +71,7 @@ pub fn handle_add_message(
             reversing,
           )
         message.Privilege(event_id:) -> on_privilege(state, on, event_id)
+        message.AddConfirm(event_id:) -> on_add_confirm(state, event_id)
       }
   }
 }
@@ -84,22 +87,23 @@ fn on_edge_test(
     True -> {
       // SAME FRAGMENT: the new edge forms a cycle. The max weight edge on the cycle must
       // be removed.
-      let add_msg =
-        message.Addition(
-          event_id: eid,
-          new_weight: info.edge.weight,
-          origin: state.id,
-          running_max: 0,
-          max_edge: eid,
-        )
-      let envelope = message.AddMsg(add_msg, fragment: state.fragment)
-
       case state.parent_edge {
         None -> {
-          // If this node is already the root, it handles the Addition locally.
-          on_addition(state, eid, eid, info.edge.weight, state.id, 0, eid)
+          // If this node is already the root, handle the Addition locally.
+          process_addition(state, eid, eid, info.edge.weight, state.id, 0, eid)
         }
-        Some(parent_edge) -> #(state, [node.Send(parent_edge, envelope)])
+        Some(parent_edge) -> {
+          let add_msg =
+            message.Addition(
+              event_id: eid,
+              new_weight: info.edge.weight,
+              origin: state.id,
+              running_max: 0,
+              max_edge: eid,
+            )
+          let envelope = message.AddMsg(add_msg, fragment: state.fragment)
+          #(state, [node.Send(parent_edge, envelope)])
+        }
       }
     }
     False -> {
@@ -145,15 +149,16 @@ fn on_request_merge(
   let is_root = state.parent_edge == option.None
   case is_root {
     True -> {
-      // TODO: concurrent requests should not be approved.
-      // The root approves the merge. Broadcast the approval down the tree.
+      // NOT FIXED (needs new State field): a second AddRequestMergePartition
+      // arriving here while an earlier merge is still being approved should
+      // be rejected or queued, not approved outright. Doing this properly
+      // needs the root to track "is a merge currently pending?" somewhere
+      // in State -- not defined anywhere I have visibility into.
       let msg = message.AddApproveMergePartition(add_edge)
       let envelope = message.AddMsg(msg, fragment: state.fragment)
       #(state, broadcast_to_tree(state, option.None, envelope))
     }
     False -> {
-      // Not the root. Forward the request upward via the parent link.
-      // Adjust `state.parent` to match your struct's tree-routing field.
       let assert option.Some(parent_edge) = state.parent_edge
       let msg = message.AddRequestMergePartition(add_edge)
       let envelope = message.AddMsg(msg, fragment: state.fragment)
@@ -173,14 +178,8 @@ fn on_approve_merge(
   let effects = broadcast_to_tree(state, option.Some(on), envelope)
 
   case dict.get(state.edges, add_edge) {
-    Ok(info) -> {
-      // Merge if we are the endpoint that requested the merge.
-      merge(state, add_edge, info, effects)
-    }
-    Error(_) -> {
-      // We do not own the target edge: forward the approval.
-      #(state, effects)
-    }
+    Ok(info) -> merge(state, add_edge, info, effects)
+    Error(_) -> #(state, effects)
   }
 }
 
@@ -192,7 +191,6 @@ fn merge(
 ) -> #(State, List(Effect)) {
   // We own the edge! Execute the merge.
   let updated_info = EdgeInfo(..edge_info, status: Selected)
-  // Promote to Tree edge
   let state =
     State(..state, edges: dict.insert(state.edges, edge_id, updated_info))
 
@@ -218,34 +216,47 @@ pub fn on_addition(
     True -> #(in_info.edge.weight, from_edge)
     False -> #(running_max, max_edge)
   }
+  process_addition(
+    state,
+    from_edge,
+    event_id,
+    new_weight,
+    origin,
+    updated_max,
+    updated_max_edge,
+  )
+}
 
+/// LCA-detection and forwarding logic.
+fn process_addition(
+  state: State,
+  from_edge: EdgeId,
+  event_id: EdgeId,
+  new_weight: Int,
+  origin: NodeId,
+  running_max: Int,
+  max_edge: EdgeId,
+) -> #(State, List(Effect)) {
   let updated_msg =
-    message.Addition(
-      event_id:,
-      new_weight:,
-      origin:,
-      running_max: updated_max,
-      max_edge: updated_max_edge,
-    )
+    message.Addition(event_id:, new_weight:, origin:, running_max:, max_edge:)
 
   // Check if we already received an Addition for this event (LCA check).
   case dict.get(state.pending_additions, event_id) {
     Ok(#(first_msg, first_msg_from_edge)) -> {
       let assert message.Addition(..) = first_msg
       // We are the LCA. Now we update the topology.
-      let overall_max = case first_msg.running_max > updated_max {
+      let overall_max = case first_msg.running_max > running_max {
         True -> #(
           first_msg.running_max,
           first_msg.max_edge,
           first_msg.origin,
           first_msg_from_edge,
         )
-        False -> #(updated_max, updated_max_edge, origin, from_edge)
+        False -> #(running_max, max_edge, origin, from_edge)
       }
 
       case new_weight < overall_max.0 {
         True -> {
-          // TODO: what if we are already the node with the heaviest edge?
           // The new edge is lighter: prune the heaviest edge.
           let replace_msg =
             message.Replace(
@@ -256,8 +267,6 @@ pub fn on_addition(
               reversing: False,
             )
           let envelope = message.AddMsg(replace_msg, fragment: state.fragment)
-
-          // Route Replace down toward the branch that reported the max weight.
           #(state, [node.Send(overall_max.3, envelope)])
         }
         False -> {
@@ -283,7 +292,7 @@ pub fn on_addition(
           #(state, [node.Send(parent_edge, envelope)])
         }
         None -> {
-          // We are the Root
+          // We are the Root: wait for the second half to arrive.
           #(state, [])
         }
       }
@@ -306,19 +315,16 @@ fn on_replace(
   // Find the next hop towards the origin.
   let next_hop = case state.id == target_origin {
     True -> option.None
-    False -> {
+    False ->
       case dict.get(state.pending_additions, event_id) {
         Ok(#(_msg, child_edge)) -> option.Some(child_edge)
         Error(_) -> option.None
       }
-    }
   }
 
   // Reverse the parent pointer if we are on the disconnected side.
   let state = case now_reversing {
     True -> {
-      // The new parent is the neighbor we are forwarding the message to.
-      // If we are at the origin, the new parent is the newly added edge itself.
       let new_parent = case state.id == target_origin {
         True -> event_id
         False -> option.unwrap(next_hop, event_id)
@@ -354,24 +360,45 @@ fn on_replace(
     Error(_) -> state
   }
 
-  // If we are the target_origin, promote the new edge to the tree.
-  let state = case state.id == target_origin {
-    True -> {
+  // If we are the target_origin, promote the new edge to the tree and tell the peer
+  // across it to do the same (the Replace only ever reaches this one side).
+  case state.id == target_origin {
+    True ->
       case dict.get(state.edges, event_id) {
         Ok(info) -> {
           let updated_info = EdgeInfo(..info, status: Selected)
-          State(
-            ..state,
-            edges: dict.insert(state.edges, event_id, updated_info),
-          )
+          let state =
+            State(
+              ..state,
+              edges: dict.insert(state.edges, event_id, updated_info),
+            )
+          let confirm =
+            message.AddMsg(
+              message.AddConfirm(event_id:),
+              fragment: state.fragment,
+            )
+          #(state, [node.Send(event_id, confirm), ..effects])
         }
-        Error(_) -> state
+        Error(_) -> #(state, effects)
       }
-    }
-    False -> state
+    False -> #(state, effects)
   }
+}
 
-  #(state, effects)
+/// Forcefully promote to Selected the edge from which this AddConfirm arrived. Used by
+/// on_replace to notify the non-target_origin endpoint of a newly added edge that it is
+/// now part of the MST.
+fn on_add_confirm(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
+  case dict.get(state.edges, event_id) {
+    Ok(info) -> {
+      let updated_info = EdgeInfo(..info, status: Selected)
+      #(
+        State(..state, edges: dict.insert(state.edges, event_id, updated_info)),
+        [],
+      )
+    }
+    Error(_) -> #(state, [])
+  }
 }
 
 fn on_privilege(
@@ -399,8 +426,6 @@ fn broadcast_to_tree(
       Some(ignore_eid) -> eid == ignore_eid
       None -> False
     }
-
-    // Notice we use `Selected` here to match your struct instead of `Branch`
     case info.status == Selected && !should_ignore {
       True -> [Send(eid, msg), ..effects]
       False -> effects
