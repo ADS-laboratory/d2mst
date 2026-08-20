@@ -98,14 +98,20 @@ pub fn summaries(sim: Sim) -> List(logger.Summary) {
 // delivered.
 
 /// Add an isolated node. `add_link` is what connects it to the network.
+/// Woken immediately: `ghs.wakeup` already treats a node with no edges as
+/// a complete, halted MST on its own, but only once it actually wakes, and
+/// nothing else will ever wake a node nobody has linked to yet.
 pub fn add_node(sim: Sim, n: NodeId) -> Sim {
   case dict.has_key(sim.states, n) {
     True -> sim
     False ->
-      Sim(
-        ..sim,
-        graph: graph.add_node(sim.graph, n),
-        states: dict.insert(sim.states, n, node.init(n, [])),
+      wake(
+        Sim(
+          ..sim,
+          graph: graph.add_node(sim.graph, n),
+          states: dict.insert(sim.states, n, node.init(n, [])),
+        ),
+        n,
       )
   }
 }
@@ -130,13 +136,22 @@ pub fn crash_node(sim: Sim, n: NodeId) -> Sim {
 
 /// Add an edge and introduce it to both endpoints. A previously failed edge
 /// that comes back is a brand new edge protocol-wide. Endpoints that do not
-/// exist yet are created.
+/// exist yet are created. A no-op if the edge already exists: `LinkUp`
+/// means "this edge is new" and the pure protocol blindly overwrites
+/// whatever `EdgeInfo` it already holds for the id, so re-attaching a
+/// still-live edge would silently reset a tree edge's status without going
+/// through any repair (mirrors the guard in `engine/network.add_link`).
 pub fn add_link(sim: Sim, e: Edge) -> Sim {
-  let sim = sim |> add_node(e.u) |> add_node(e.v)
-  enqueue(Sim(..sim, graph: graph.add_edge(sim.graph, e)), [
-    #(e.u, node.LinkUp(e)),
-    #(e.v, node.LinkUp(e)),
-  ])
+  case graph.has_edge(sim.graph, graph.edge_id(e.u, e.v)) {
+    True -> sim
+    False -> {
+      let sim = sim |> add_node(e.u) |> add_node(e.v)
+      enqueue(Sim(..sim, graph: graph.add_edge(sim.graph, e)), [
+        #(e.u, node.LinkUp(e)),
+        #(e.v, node.LinkUp(e)),
+      ])
+    }
+  }
 }
 
 /// Delete an edge: both endpoints observe `LinkDown`, and anything still in

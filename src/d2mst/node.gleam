@@ -59,7 +59,51 @@ pub type EdgeStatus {
 }
 
 pub type EdgeInfo {
-  EdgeInfo(peer: NodeId, edge: Edge, status: EdgeStatus)
+  /// `via_addition`: this edge was registered through the Tier 3
+  /// `addition.add_edge` entry point rather than present from `init`. Used
+  /// purely to retry an addition round abandoned mid-flight by a
+  /// concurrent failure (see `d2m.retry_abandoned_additions`): once this
+  /// node is quiescent again, any incident edge that is still `Undecided`
+  /// *and* came in this way gets re-probed with a fresh `AddTest`, since
+  /// nothing else re-drives it after the fragment-mismatch discard.
+  ///
+  /// `confirmed`: this side has both sent *and received* a `Connect` for
+  /// this edge (set by `d2m.on_connect`'s mutual branch). `status ==
+  /// Selected` alone only means *this* side decided to merge -- the two
+  /// sides of a cross-fragment merge can complete at very different times
+  /// (a fragment's own root merges immediately, a non-root side has to ask
+  /// its root first), so a `Selected`-but-not-`confirmed` edge means this
+  /// side is still waiting to hear back. `addition.on_edge_test` uses that
+  /// distinction to keep nudging a peer that is still stuck (see its
+  /// top-level guard) instead of silently ignoring it, which used to
+  /// strand the slower side forever whenever its one shot at asking its
+  /// root got dropped during a concurrent repair.
+  EdgeInfo(
+    peer: NodeId,
+    edge: Edge,
+    status: EdgeStatus,
+    via_addition: Bool,
+    confirmed: Bool,
+  )
+}
+
+/// What an LCA decided once both `Addition` branches converged on it,
+/// stashed until the root's `Privilege` token authorizes acting on it.
+/// `target_origin`/`next_edge` name the branch that reported the cycle's
+/// heaviest edge (which gets pruned); `other_origin`/`other_next_edge` name
+/// the other branch (which only needs its own side of the new edge
+/// attached, no pruning or reversal).
+pub type ReplaceDecision {
+  ReplaceDecision(
+    should_prune: Bool,
+    target_origin: NodeId,
+    next_edge: EdgeId,
+    other_origin: NodeId,
+    other_next_edge: EdgeId,
+    max_weight: Int,
+    max_edge: EdgeId,
+    already_at_max_edge: Bool,
+  )
 }
 
 /// The node state machine.
@@ -98,11 +142,36 @@ pub type State {
     bs_right: message.BsScan,
     /// Pending additions, waiting for the other branch to arrive at the LCA.
     pending_additions: Dict(EdgeId, #(message.AddMsg, EdgeId)),
+    /// Every node strictly between an LCA and the root, on the path an
+    /// `AddRequestTurn` travelled: event id -> the child edge to route the
+    /// matching `Privilege` back down to. Never populated at the LCA
+    /// itself (it has `ready_replace` instead) nor below it.
+    turn_routing: Dict(EdgeId, EdgeId),
+    /// LCA-side: decisions computed once both `Addition` branches
+    /// converged, waiting for their `Privilege` token before acting.
+    ready_replace: Dict(EdgeId, ReplaceDecision),
+    /// LCA-side: how many of the two branches' `AddDone` acks are still
+    /// outstanding for an event currently being executed.
+    replace_wait_countdown: Dict(EdgeId, Int),
+    /// Root-side: addition events waiting their turn, in arrival order.
+    addition_queue: List(EdgeId),
+    /// Root-side: the event currently authorized to run, if any. The root
+    /// only grants the next queued event once this clears.
+    addition_active: Option(EdgeId),
   )
 }
 
+/// Excludes `via_addition` edges: those are driven exclusively by the
+/// addition protocol (`on_edge_test`/`on_addition`/`retry_abandoned_additions`),
+/// never by the ordinary MOE search. Without this exclusion, an unrelated
+/// concurrent repair's Phase 3 search can probe a `via_addition` edge still
+/// mid-flight in the addition protocol, see it as transiently "outgoing"
+/// (the two endpoints haven't converged on the same fragment identity yet),
+/// and claim it via the plain GHS merge path (`on_connect`) -- which just
+/// marks it Selected, bypassing the cycle max-weight prune that the
+/// addition protocol's `on_replace`/`execute_decision` is responsible for.
 pub fn min_undecided_edge(state: State) -> Option(EdgeId) {
-  min_edge(state, fn(info) { info.status == Undecided })
+  min_edge(state, fn(info) { info.status == Undecided && !info.via_addition })
 }
 
 pub type Event {
@@ -139,7 +208,13 @@ pub fn init_with_strategy(
       dict.insert(
         d,
         graph.edge_id(e.u, e.v),
-        EdgeInfo(peer:, edge: e, status: Undecided),
+        EdgeInfo(
+          peer:,
+          edge: e,
+          status: Undecided,
+          via_addition: False,
+          confirmed: False,
+        ),
       )
     })
   State(
@@ -162,6 +237,11 @@ pub fn init_with_strategy(
     bs_left: message.bs_scan_zero,
     bs_right: message.bs_scan_zero,
     pending_additions: dict.new(),
+    turn_routing: dict.new(),
+    ready_replace: dict.new(),
+    replace_wait_countdown: dict.new(),
+    addition_queue: [],
+    addition_active: None,
   )
 }
 
@@ -178,7 +258,13 @@ pub fn add_edge(state: State, edge: Edge) -> State {
     edges: dict.insert(
       state.edges,
       graph.edge_id(edge.u, edge.v),
-      EdgeInfo(peer:, edge:, status: Undecided),
+      EdgeInfo(
+        peer:,
+        edge:,
+        status: Undecided,
+        via_addition: False,
+        confirmed: False,
+      ),
     ),
   )
 }
@@ -210,6 +296,16 @@ pub fn set_status(state: State, eid: EdgeId, status: EdgeStatus) -> State {
   State(
     ..state,
     edges: dict.insert(state.edges, eid, EdgeInfo(..info, status:)),
+  )
+}
+
+/// Marks an edge's cross-fragment merge as mutually confirmed: this side
+/// has both sent and received a `Connect` for it. See `EdgeInfo.confirmed`.
+pub fn set_confirmed(state: State, eid: EdgeId) -> State {
+  let assert Ok(info) = dict.get(state.edges, eid)
+  State(
+    ..state,
+    edges: dict.insert(state.edges, eid, EdgeInfo(..info, confirmed: True)),
   )
 }
 
