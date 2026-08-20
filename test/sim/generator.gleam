@@ -28,7 +28,7 @@ fn next(seed: Seed) -> Seed {
   }
 }
 
-fn rand_below(seed: Seed, max: Int) -> #(Int, Seed) {
+pub fn rand_below(seed: Seed, max: Int) -> #(Int, Seed) {
   let seed = next(seed)
   #(seed % max, seed)
 }
