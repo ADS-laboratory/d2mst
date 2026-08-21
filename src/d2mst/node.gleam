@@ -52,23 +52,13 @@ pub type EdgeInfo {
   /// node is quiescent again, any incident edge that is still `Undecided`
   /// *and* came in this way gets re-probed with a fresh `AddTest`, since
   /// nothing else re-drives it after the fragment-mismatch discard.
-  ///
-  /// `confirmed`: this side has both sent *and received* a `Connect` for
-  /// this edge (set by `d2m.on_connect`'s mutual branch). `status ==
-  /// Selected` alone only means *this* side decided to merge -- the two
-  /// sides of a cross-fragment merge can complete at very different times
-  /// (a fragment's own root merges immediately, a non-root side has to ask
-  /// its root first), so a `Selected`-but-not-`confirmed` edge means this
-  /// side is still waiting to hear back. `addition.on_edge_test` uses that
-  /// distinction to keep nudging a peer that is still stuck (see its
-  /// top-level guard) instead of silently ignoring it, which used to
-  /// strand the slower side forever whenever its one shot at asking its
-  /// root got dropped during a concurrent repair.
   EdgeInfo(
     peer: NodeId,
     edge: Edge,
     status: EdgeStatus,
     via_addition: Bool,
+    /// An edge is confirmed once both endpoints have sent and received a `Connect` (it is
+    /// Selected on both sides).
     confirmed: Bool,
   )
 }

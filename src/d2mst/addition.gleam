@@ -101,45 +101,12 @@ fn on_edge_test(
   let assert Ok(info) = dict.get(state.edges, eid)
 
   case info.confirmed {
-    // Fully done, both ways: either this side has both sent and received a
-    // `Connect` for this edge (cross-fragment merge path, see `on_connect`),
-    // or it was resolved via the same-fragment cycle-prune path instead
-    // (`on_replace`/`execute_decision`, where mutual agreement comes from
-    // the LCA's decision plus the Replace wave, not a `Connect` exchange --
-    // so `confirmed` is set there directly). Either way, a stray/duplicate
-    // `AddTest` at this point would either re-run cycle detection on an
-    // edge that is already a tree edge, or re-request a merge that already
-    // happened -- both silently fine on their own, but the redundant
-    // `Connect`/`AddRequestMergePartition` they'd produce used to compound
-    // into a `ReIden` storm when a dense burst of unrelated repairs kept
-    // `retry_abandoned_additions` re-firing fresh `AddTest`s before the
-    // first attempt had a chance to land everywhere (see `merge`'s matching
-    // guard). Ignoring it here is safe.
+    // Already confirmed: ignore.
     True -> #(state, [])
     False ->
       case info.status == Selected {
-        // Decided on this side, but not yet mutually confirmed: this side
-        // already sent its own `Connect` (`status: Selected`) and is still
-        // waiting to receive the peer's. A fresh incoming `AddTest` means
-        // the peer is still stuck -- most likely its own original `AddTest`
-        // was dropped mid-repair (see Case 2 below) and, since a fragment
-        // root merges instantly while a non-root side has to ask its root
-        // first, this side may have finished long before the peer ever got
-        // its own chance to start. Resend a fresh `AddTest` (not `Connect`:
-        // the peer's own status is still `Undecided`, so it needs another
-        // shot at Case 1/2 below, not another deferred `Connect` it can't
-        // yet act on) so the peer gets that chance. Confirmed reproducible
-        // and fixed by this: seed 1, i=40 of
-        // `fuzz_long_running_random_topology_test` -- node 1003 merges
-        // instantly (it is its own singleton fragment's root) while node 7
-        // (non-root) has its one shot at asking its root dropped by a
-        // concurrent repair, and previously had nothing left to ever retry
-        // it, stranding node 7 at `parent_edge: None` forever with a
-        // one-sided `Selected` edge. Safe from ping-ponging between two
-        // already-decided sides: the moment the peer's own `AddTest`
-        // succeeds, both sides reach `confirmed` (via the mutual
-        // `Connect` exchange) and this branch stops firing for either of
-        // them.
+        // Decided on this side, but not yet mutually confirmed: just forward the test to
+        // the other side.
         True -> #(state, [
           node.Send(
             eid,
@@ -192,41 +159,23 @@ fn on_edge_test(
                   }
                 }
                 False -> {
-                  // Case 2: a failure response is in progress. Drop this
-                  // `AddTest` rather than deferring/retrying it locally.
+                  // Case 2: A failure response is in progress. Drop this `AddTest`
+                  // instead of deferring it.
+                  // 
+                  // 1. Deferring saves a stale snapshot of the sender's `reported`
+                  //    fragment ID.
+                  // 2. Because topologies and fragment IDs shift during active repairs,
+                  //    evaluating this stale ID later can cause a false "different
+                  //    fragment" detection.
+                  // 3. This false detection can trick the algorithm into authorizing a
+                  //    cross-fragment merge between nodes that have already converged
+                  //    elsewhere, creating illegal cycles and infinite routing loops.
                   //
-                  // A retry needs a same/different-fragment comparison that
-                  // is still accurate by the time it runs, but *both* sides
-                  // of that comparison can go stale while a repair is in
-                  // flight: keeping the sender's original `reported` and
-                  // comparing it against this node's (possibly much later)
-                  // `state.fragment` misses that the two ends may have since
-                  // genuinely converged into the same fragment (confirmed:
-                  // seed 1, i=15's burst in
-                  // `fuzz_long_running_random_topology_test` -- (6,17) gets
-                  // waved through as a cross-fragment merge onto an edge
-                  // that, by the time it lands, already closes a cycle with
-                  // (6,23)/(17,18)/(18,23), and the resulting fragment ends
-                  // up with two parent-pointer paths between the same
-                  // nodes, so `ReIden` circles the cycle forever).
-                  // Re-stamping with `state.fragment` instead has the same
-                  // problem in the other direction (confirmed: seed 1,
-                  // i=40, node 1003 stranded with `parent_edge: None`
-                  // before the `confirmed`-tracking fix above). Neither
-                  // snapshot can be trusted.
-                  //
-                  // The fix is to not trust either one: once *this* node
-                  // quiesces, `d2m.enter_sleep`/`on_go_sleep` already calls
-                  // `retry_abandoned_additions`, which re-sends a brand new
-                  // `AddTest` stamped with this node's *then-current*
-                  // fragment to the peer -- so the peer's own comparison is
-                  // always made against fresh state on both sides, never a
-                  // stale snapshot. Mirrors the same
-                  // discard-and-let-`retry_abandoned_additions`-redrive
-                  // pattern `handle_failure_message`/`handle_add_message`
-                  // already use for a fragment-mismatched intra-fragment
-                  // message (see
-                  // `message.fail_is_intra_fragment`/`add_is_intra_fragment`).
+                  // By dropping the message entirely, we guarantee safety. Once this node 
+                  // finishes its repair and enters the `Sleeping` state,
+                  // `retry_abandoned_additions` will automatically send a new `AddTest`.
+                  // This ensures the fragment comparison always happens using up-to-date
+                  // state on both sides.
                   #(state, [])
                 }
               }
@@ -235,6 +184,154 @@ fn on_edge_test(
       }
   }
 }
+
+// --------------------------------------------------------- //
+//                            LCA                            //
+// --------------------------------------------------------- //
+
+pub fn on_addition(
+  state: State,
+  from_edge: EdgeId,
+  event_id: EdgeId,
+  new_weight: Int,
+  origin: NodeId,
+  running_max: Int,
+  max_edge: EdgeId,
+) -> #(State, List(Effect)) {
+  let assert Ok(in_info) = dict.get(state.edges, from_edge)
+
+  // Update running maximum weight along this branch.
+  let #(updated_max, updated_max_edge) = case
+    graph.edge_less(
+      graph.Edge(max_edge.low, max_edge.high, running_max),
+      graph.Edge(from_edge.low, from_edge.high, in_info.edge.weight),
+    )
+  {
+    True -> #(in_info.edge.weight, from_edge)
+    False -> #(running_max, max_edge)
+  }
+
+  let updated_msg =
+    message.Addition(
+      event_id:,
+      new_weight:,
+      origin:,
+      running_max: updated_max,
+      max_edge: updated_max_edge,
+    )
+
+  // Check if we already received an Addition for this event (LCA check).
+  // The stored fragment tag must still match ours.
+  case dict.get(state.pending_additions, event_id) {
+    Ok(#(first_msg, first_msg_from_edge, stored_fragment))
+      if stored_fragment == state.fragment
+    -> {
+      let assert message.Addition(..) = first_msg
+      // We are the LCA. Now we update the topology. `winner` is the branch
+      // that reported the larger running max (the one that actually holds
+      // the cycle's heaviest edge); `other_*` is the losing branch's own
+      // origin/routing edge, needed below to attach *its* side of the new
+      // edge too.
+      let winner_is_first =
+        graph.edge_less(
+          graph.Edge(updated_max_edge.low, updated_max_edge.high, updated_max),
+          graph.Edge(
+            first_msg.max_edge.low,
+            first_msg.max_edge.high,
+            first_msg.running_max,
+          ),
+        )
+      let max_weight = case winner_is_first {
+        True -> first_msg.running_max
+        False -> updated_max
+      }
+      let max_edge = case winner_is_first {
+        True -> first_msg.max_edge
+        False -> updated_max_edge
+      }
+      let target_origin = case winner_is_first {
+        True -> first_msg.origin
+        False -> origin
+      }
+      let next_edge = case winner_is_first {
+        True -> first_msg_from_edge
+        False -> from_edge
+      }
+      let other_origin = case winner_is_first {
+        True -> origin
+        False -> first_msg.origin
+      }
+      let other_next_edge = case winner_is_first {
+        True -> from_edge
+        False -> first_msg_from_edge
+      }
+
+      let already_at_max_edge = next_edge == max_edge
+      let state =
+        State(
+          ..state,
+          pending_additions: dict.delete(state.pending_additions, event_id),
+        )
+
+      let decision =
+        ReplaceDecision(
+          should_prune: graph.edge_less(
+            graph.Edge(event_id.low, event_id.high, new_weight),
+            graph.Edge(max_edge.low, max_edge.high, max_weight),
+          ),
+          target_origin:,
+          next_edge:,
+          other_origin:,
+          other_next_edge:,
+          max_weight:,
+          max_edge:,
+          already_at_max_edge:,
+        )
+      let state =
+        State(
+          ..state,
+          ready_replace: dict.insert(state.ready_replace, event_id, decision),
+        )
+
+      // We have a decision, but must not act on it yet: another
+      // concurrently-converging LCA elsewhere in the fragment might have
+      // its own decision pending too, and if our cycles overlap, running
+      // both at once could remove/reverse the same edge twice. Ask the
+      // root for a turn instead of acting (report ch. 3, "Overlapping
+      // cycles serialization").
+      relay_or_root(state, event_id)
+    }
+    _ -> {
+      // First *live* Addition to arrive at this node: save it and forward
+      // upward. Reached both when there's genuinely no entry yet, and when
+      // the guard above rejected a stale one.
+      let state =
+        State(
+          ..state,
+          pending_additions: dict.insert(state.pending_additions, event_id, #(
+            updated_msg,
+            from_edge,
+            state.fragment,
+          )),
+        )
+
+      case state.parent_edge {
+        Some(parent_edge) -> {
+          let envelope = message.AddMsg(updated_msg, fragment: state.fragment)
+          #(state, [node.Send(parent_edge, envelope)])
+        }
+        None -> {
+          // We are the root, still waiting for a sibling branch.
+          #(state, [])
+        }
+      }
+    }
+  }
+}
+
+// --------------------------------------------------------- //
+//                      Update Topology                      //
+// --------------------------------------------------------- //
 
 fn on_request_merge(
   state: State,
@@ -435,146 +532,6 @@ fn merge(
       let envelope =
         message.D2MMsg(msg: message.Connect, fragment: state.fragment)
       #(state, [Send(edge_id, envelope), ..effects])
-    }
-  }
-}
-
-pub fn on_addition(
-  state: State,
-  from_edge: EdgeId,
-  event_id: EdgeId,
-  new_weight: Int,
-  origin: NodeId,
-  running_max: Int,
-  max_edge: EdgeId,
-) -> #(State, List(Effect)) {
-  let assert Ok(in_info) = dict.get(state.edges, from_edge)
-
-  // Update running maximum weight along this branch.
-  let #(updated_max, updated_max_edge) = case
-    graph.edge_less(
-      graph.Edge(max_edge.low, max_edge.high, running_max),
-      graph.Edge(from_edge.low, from_edge.high, in_info.edge.weight),
-    )
-  {
-    True -> #(in_info.edge.weight, from_edge)
-    False -> #(running_max, max_edge)
-  }
-
-  let updated_msg =
-    message.Addition(
-      event_id:,
-      new_weight:,
-      origin:,
-      running_max: updated_max,
-      max_edge: updated_max_edge,
-    )
-
-  // Check if we already received an Addition for this event (LCA check).
-  // The stored fragment tag must still match ours.
-  case dict.get(state.pending_additions, event_id) {
-    Ok(#(first_msg, first_msg_from_edge, stored_fragment))
-      if stored_fragment == state.fragment
-    -> {
-      let assert message.Addition(..) = first_msg
-      // We are the LCA. Now we update the topology. `winner` is the branch
-      // that reported the larger running max (the one that actually holds
-      // the cycle's heaviest edge); `other_*` is the losing branch's own
-      // origin/routing edge, needed below to attach *its* side of the new
-      // edge too.
-      let winner_is_first =
-        graph.edge_less(
-          graph.Edge(updated_max_edge.low, updated_max_edge.high, updated_max),
-          graph.Edge(
-            first_msg.max_edge.low,
-            first_msg.max_edge.high,
-            first_msg.running_max,
-          ),
-        )
-      let max_weight = case winner_is_first {
-        True -> first_msg.running_max
-        False -> updated_max
-      }
-      let max_edge = case winner_is_first {
-        True -> first_msg.max_edge
-        False -> updated_max_edge
-      }
-      let target_origin = case winner_is_first {
-        True -> first_msg.origin
-        False -> origin
-      }
-      let next_edge = case winner_is_first {
-        True -> first_msg_from_edge
-        False -> from_edge
-      }
-      let other_origin = case winner_is_first {
-        True -> origin
-        False -> first_msg.origin
-      }
-      let other_next_edge = case winner_is_first {
-        True -> from_edge
-        False -> first_msg_from_edge
-      }
-
-      let already_at_max_edge = next_edge == max_edge
-      let state =
-        State(
-          ..state,
-          pending_additions: dict.delete(state.pending_additions, event_id),
-        )
-
-      let decision =
-        ReplaceDecision(
-          should_prune: graph.edge_less(
-            graph.Edge(event_id.low, event_id.high, new_weight),
-            graph.Edge(max_edge.low, max_edge.high, max_weight),
-          ),
-          target_origin:,
-          next_edge:,
-          other_origin:,
-          other_next_edge:,
-          max_weight:,
-          max_edge:,
-          already_at_max_edge:,
-        )
-      let state =
-        State(
-          ..state,
-          ready_replace: dict.insert(state.ready_replace, event_id, decision),
-        )
-
-      // We have a decision, but must not act on it yet: another
-      // concurrently-converging LCA elsewhere in the fragment might have
-      // its own decision pending too, and if our cycles overlap, running
-      // both at once could remove/reverse the same edge twice. Ask the
-      // root for a turn instead of acting (report ch. 3, "Overlapping
-      // cycles serialization").
-      relay_or_root(state, event_id)
-    }
-    _ -> {
-      // First *live* Addition to arrive at this node: save it and forward
-      // upward. Reached both when there's genuinely no entry yet, and when
-      // the guard above rejected a stale one.
-      let state =
-        State(
-          ..state,
-          pending_additions: dict.insert(state.pending_additions, event_id, #(
-            updated_msg,
-            from_edge,
-            state.fragment,
-          )),
-        )
-
-      case state.parent_edge {
-        Some(parent_edge) -> {
-          let envelope = message.AddMsg(updated_msg, fragment: state.fragment)
-          #(state, [node.Send(parent_edge, envelope)])
-        }
-        None -> {
-          // We are the root, still waiting for a sibling branch.
-          #(state, [])
-        }
-      }
     }
   }
 }
