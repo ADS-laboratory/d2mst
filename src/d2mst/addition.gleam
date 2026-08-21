@@ -11,42 +11,7 @@ import gleam/dict
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
-/// Compares two (weight, edge id) pairs the same way `graph.compare_edge`
-/// breaks ties on raw weight collisions, so the cycle's "heaviest edge"
-/// agrees with what `graph.kruskal` would pick even when two candidate
-/// edges share a weight.
-fn weight_less(w1: Int, e1: EdgeId, w2: Int, e2: EdgeId) -> Bool {
-  graph.edge_less(
-    graph.Edge(e1.low, e1.high, w1),
-    graph.Edge(e2.low, e2.high, w2),
-  )
-}
-
-/// Register a newly added edge and trigger the addition response protocol.
-pub fn add_edge(state: State, edge: Edge) -> #(State, List(Effect)) {
-  let peer = graph.other_node(edge, state.id)
-  let eid = graph.edge_id(edge.u, edge.v)
-  let state =
-    State(
-      ..state,
-      edges: dict.insert(
-        state.edges,
-        eid,
-        EdgeInfo(
-          peer:,
-          edge:,
-          status: Undecided,
-          via_addition: True,
-          confirmed: False,
-        ),
-      ),
-    )
-
-  let effect =
-    Send(eid, message.AddMsg(message.AddTest, fragment: state.fragment))
-  #(state, [effect])
-}
-
+/// Dispatches a Add message to the appropriate handler.
 pub fn handle_add_message(
   state: State,
   on: EdgeId,
@@ -96,6 +61,36 @@ pub fn handle_add_message(
         message.AddDone(event_id:) -> on_add_done(state, on, event_id)
       }
   }
+}
+
+// --------------------------------------------------------- //
+//            Endpoints' Fragments Discrimination            //
+// --------------------------------------------------------- //
+
+/// Register a newly added edge and trigger the addition response protocol (i.e. ask to 
+/// the neighbor if it is in the same fragment or not and wait for a response).
+pub fn add_edge(state: State, edge: Edge) -> #(State, List(Effect)) {
+  let peer = graph.other_node(edge, state.id)
+  let eid = graph.edge_id(edge.u, edge.v)
+  let state =
+    State(
+      ..state,
+      edges: dict.insert(
+        state.edges,
+        eid,
+        EdgeInfo(
+          peer:,
+          edge:,
+          status: Undecided,
+          via_addition: True,
+          confirmed: False,
+        ),
+      ),
+    )
+
+  let effect =
+    Send(eid, message.AddMsg(message.AddTest, fragment: state.fragment))
+  #(state, [effect])
 }
 
 fn on_edge_test(
@@ -455,13 +450,12 @@ pub fn on_addition(
 ) -> #(State, List(Effect)) {
   let assert Ok(in_info) = dict.get(state.edges, from_edge)
 
-  // Update running maximum weight along this branch. Compared the same way
-  // `graph.kruskal` breaks ties (weight, then edge id), not on raw weight
-  // alone: two edges in the same cycle can legitimately share a weight, and
-  // picking the wrong one of a tied pair as "heaviest" disagrees with the
-  // oracle every time the tie also happens to be the cycle's actual max.
+  // Update running maximum weight along this branch.
   let #(updated_max, updated_max_edge) = case
-    weight_less(running_max, max_edge, in_info.edge.weight, from_edge)
+    graph.edge_less(
+      graph.Edge(max_edge.low, max_edge.high, running_max),
+      graph.Edge(from_edge.low, from_edge.high, in_info.edge.weight),
+    )
   {
     True -> #(in_info.edge.weight, from_edge)
     False -> #(running_max, max_edge)
@@ -489,11 +483,13 @@ pub fn on_addition(
       // origin/routing edge, needed below to attach *its* side of the new
       // edge too.
       let winner_is_first =
-        weight_less(
-          updated_max,
-          updated_max_edge,
-          first_msg.running_max,
-          first_msg.max_edge,
+        graph.edge_less(
+          graph.Edge(updated_max_edge.low, updated_max_edge.high, updated_max),
+          graph.Edge(
+            first_msg.max_edge.low,
+            first_msg.max_edge.high,
+            first_msg.running_max,
+          ),
         )
       let max_weight = case winner_is_first {
         True -> first_msg.running_max
@@ -529,7 +525,10 @@ pub fn on_addition(
 
       let decision =
         ReplaceDecision(
-          should_prune: weight_less(new_weight, event_id, max_weight, max_edge),
+          should_prune: graph.edge_less(
+            graph.Edge(event_id.low, event_id.high, new_weight),
+            graph.Edge(max_edge.low, max_edge.high, max_weight),
+          ),
           target_origin:,
           next_edge:,
           other_origin:,
