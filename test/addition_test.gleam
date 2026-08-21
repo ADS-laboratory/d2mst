@@ -59,6 +59,26 @@ pub fn different_fragment_partition_reconnect_test() {
   check(sim.graph, summaries(sim)) |> should.be_ok
 }
 
+pub fn concurrent_different_fragment_partition_reconnect_test() {
+  let a = connected(11, 5, 30)
+  let b = connected(12, 5, 30) |> shift(100)
+  let g =
+    graph.Graph(
+      nodes: list.append(a.nodes, b.nodes),
+      edges: list.append(a.edges, b.edges),
+    )
+
+  let sim = converge(g)
+  check(sim.graph, summaries(sim)) |> should.be_ok
+
+  let sim =
+    sim
+    |> add_link(Edge(0, 100, 42))
+    |> add_link(Edge(1, 101, 15))
+    |> settle
+  check(sim.graph, summaries(sim)) |> should.be_ok
+}
+
 /// A link to a node that was never part of any GHS round (it starts
 /// `Sleeping` by construction, having never been woken) must still be
 /// absorbed into the tree instead of stalling forever.

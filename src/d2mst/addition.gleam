@@ -177,9 +177,16 @@ fn on_edge_test(
                   // partitioned.
                   case state.parent_edge {
                     // If we are the root, we can merge the two fragments
-                    // directly.
-                    // TODO: what if there is already a addition in progress? Could happen? Should we check?
-                    None -> merge(state, eid, info, [])
+                    // directly if no addition/merge is currently active.
+                    None ->
+                      case state.addition_active == option.None {
+                        True -> {
+                          let state =
+                            State(..state, addition_active: option.Some(eid))
+                          merge(state, eid, info, [])
+                        }
+                        False -> #(state, [])
+                      }
                     // Otherwise, we ask the root to authorize the merge.
                     Some(parent_edge) -> {
                       // Send a request to the root to merge using this new
@@ -244,11 +251,24 @@ fn on_request_merge(
   let is_root = state.parent_edge == option.None
   case is_root {
     True -> {
-      // TODO: concurrent requests should not be approved.
-      // The root approves the merge. Broadcast the approval down the tree.
-      let msg = message.AddApproveMergePartition(add_edge)
-      let envelope = message.AddMsg(msg, fragment: state.fragment)
-      #(state, broadcast_to_tree(state, option.None, envelope))
+      case
+        state.addition_active == option.None
+        && { state.ns == Sleeping || state.halted }
+      {
+        True -> {
+          // The root approves the merge. Broadcast the approval down the tree.
+          let state = State(..state, addition_active: option.Some(add_edge))
+          let msg = message.AddApproveMergePartition(add_edge)
+          let envelope = message.AddMsg(msg, fragment: state.fragment)
+          #(state, broadcast_to_tree(state, option.None, envelope))
+        }
+        False -> {
+          // Busy with another addition or merge in progress; drop request.
+          // When the current operation settles, retry_abandoned_additions
+          // will re-probe all undecided via_addition edges.
+          #(state, [])
+        }
+      }
     }
     False -> {
       // Not the root. Forward the request upward via the parent link.
