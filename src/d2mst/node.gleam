@@ -1,19 +1,5 @@
-//// Protocol node: the pure GHS state machine.
-////
-//// `handle(state, event)` returns the new state plus the messages to send
-//// (`Effect`s).
-////
-//// The algorithm is the classic asynchronous Gallager-Humblet-Spira MST
-//// construction, with two adaptations:
-////   - edges are totally ordered by `graph.compare_edge` (weight, then edge
-////     id), so no tie-break rules are needed anywhere;
-////   - when the core detects termination it broadcasts `Halt` down the tree
-////     so every node (and any observer) can observe completion.
-////
-//// Messages that GHS must delay (Merge from a lower level not yet
-//// mergeable, Test from a higher level, Notify while still finding) are kept
-//// in `pending` and re-examined after every processed event, which is
-//// equivalent to the paper's "place message at end of queue".
+//// The node state data structure for the D2MST protocol and some helper 
+//// functions to manipulate it.
 
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId, type NodeId}
@@ -117,7 +103,6 @@ pub type State {
     fragment: FragmentId,
     level: Int,
     parent_edge: Option(EdgeId),
-    // rename to edge_to_best? (is the local edge towards the best outgoing weight found so far)
     best_edge: Option(EdgeId),
     best_wt: Option(Edge),
     test_edge: Option(EdgeId),

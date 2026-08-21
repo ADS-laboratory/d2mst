@@ -223,7 +223,7 @@ fn on_edge_test(
                   // always made against fresh state on both sides, never a
                   // stale snapshot. Mirrors the same
                   // discard-and-let-`retry_abandoned_additions`-redrive
-                  // pattern `handle_d2m_message`/`handle_add_message`
+                  // pattern `handle_failure_message`/`handle_add_message`
                   // already use for a fragment-mismatched intra-fragment
                   // message (see
                   // `message.fail_is_intra_fragment`/`add_is_intra_fragment`).

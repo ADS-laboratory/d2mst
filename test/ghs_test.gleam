@@ -3,12 +3,12 @@
 //// unique MST computed by the Kruskal oracle.
 
 import d2mst/graph.{type Graph, Edge, Graph}
+import engine/generator
 import engine/logger
 import engine/network
 import gleam/dict
 import gleam/erlang/process
 import gleam/list
-import sim/generator
 import sim/oracle
 
 fn run_and_check(g: Graph) -> Nil {

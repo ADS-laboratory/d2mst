@@ -15,8 +15,6 @@ pub type Network {
     graph: Graph,
     nodes: Dict(NodeId, node_actor.Handle),
     links: Dict(EdgeId, link.Handle),
-    /// Kept so topology events can wire newly spawned nodes to the same
-    /// observer without the caller having to pass it around again.
     logger: Subject(logger.Msg),
   )
 }
@@ -61,18 +59,9 @@ pub fn wake_all(net: Network) -> Nil {
 }
 
 // --- topology events --------------------------------------------------------
-//
-// The four events the network can undergo: a node joins or dies, a link is
-// added or fails. They mutate the running system (kill/spawn processes) and
-// return the Network value describing the new topology, so tests can keep
-// checking against the current graph. `sim/runner` mirrors this API on the
-// process-free runtime.
 
 /// Add an isolated node to the running network. It starts with no incident
-/// edges; `add_link` is what connects it to the rest of the network. Woken
-/// immediately: `ghs.wakeup` already treats a node with no edges as a
-/// complete, halted MST on its own, but only once it actually wakes, and
-/// nothing else will ever wake a node nobody has linked to yet.
+/// edges and it is woken immediately.
 pub fn add_node(net: Network, n: NodeId) -> Network {
   case dict.has_key(net.nodes, n) {
     True -> net
@@ -110,14 +99,7 @@ pub fn crash_node(net: Network, n: NodeId) -> Network {
 
 /// Add an edge to the running network: spawn its link and introduce it to
 /// both endpoint nodes. A previously failed edge that comes back is simply
-/// added again — at the protocol level it is a new edge. Both endpoints must
-/// already be in the network.
-/// A no-op if the edge already has a live link: `LinkUp` means "this edge
-/// is new", and the pure protocol (`algorithm.gleam`'s `LinkUp` handler)
-/// blindly overwrites whatever `EdgeInfo` it already holds for the id, so
-/// re-attaching a still-live edge would silently reset a tree edge's status
-/// without going through any repair. Re-adding a *failed* edge is fine and
-/// expected -- `fail_link` already removed its entry from `net.links`.
+/// added again. Both endpoints must already be in the network.
 pub fn add_link(net: Network, e: Edge) -> Network {
   let eid = graph.edge_id(e.u, e.v)
   case dict.has_key(net.links, eid) {

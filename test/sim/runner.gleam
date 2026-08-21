@@ -2,13 +2,6 @@
 //// a single FIFO event queue drives `node.handle` for every node until the
 //// system quiesces. Complements the real actor runtime by making whole
 //// protocol runs reproducible and debuggable step by step.
-////
-//// A `Sim` is a plain value, so a run reads as a pipeline: build it, wake
-//// it, let it settle, apply a topology event, let it settle again. The
-//// topology events mirror `engine/network` one for one (`add_node`,
-//// `crash_node`, `add_link`, `fail_link`) so a dynamic scenario can be
-//// written here first, where it is reproducible, and then replayed on the
-//// actor runtime.
 
 import d2mst/algorithm
 import d2mst/graph.{type Edge, type EdgeId, type Graph, type NodeId}
@@ -71,7 +64,7 @@ pub fn settle(sim: Sim) -> Sim {
   }
 }
 
-/// The common case: build, wake everything, run to quiescence.
+/// The common case: build, wake everything, run until settled.
 pub fn converge(g: Graph) -> Sim {
   new(g) |> wake_all |> settle
 }
@@ -98,9 +91,6 @@ pub fn summaries(sim: Sim) -> List(logger.Summary) {
 // delivered.
 
 /// Add an isolated node. `add_link` is what connects it to the network.
-/// Woken immediately: `ghs.wakeup` already treats a node with no edges as
-/// a complete, halted MST on its own, but only once it actually wakes, and
-/// nothing else will ever wake a node nobody has linked to yet.
 pub fn add_node(sim: Sim, n: NodeId) -> Sim {
   case dict.has_key(sim.states, n) {
     True -> sim
@@ -134,13 +124,8 @@ pub fn crash_node(sim: Sim, n: NodeId) -> Sim {
   enqueue(sim, list.map(gone, fn(p) { #(p.1, node.LinkDown(p.0)) }))
 }
 
-/// Add an edge and introduce it to both endpoints. A previously failed edge
-/// that comes back is a brand new edge protocol-wide. Endpoints that do not
-/// exist yet are created. A no-op if the edge already exists: `LinkUp`
-/// means "this edge is new" and the pure protocol blindly overwrites
-/// whatever `EdgeInfo` it already holds for the id, so re-attaching a
-/// still-live edge would silently reset a tree edge's status without going
-/// through any repair (mirrors the guard in `engine/network.add_link`).
+/// Add an edge and introduce it to both endpoints. Endpoints that do not
+/// exist yet are created. A no-op if the edge already exists.
 pub fn add_link(sim: Sim, e: Edge) -> Sim {
   case graph.has_edge(sim.graph, graph.edge_id(e.u, e.v)) {
     True -> sim
@@ -176,8 +161,6 @@ pub fn fail_link(sim: Sim, u: NodeId, v: NodeId) -> Sim {
     }
   }
 }
-
-// --- engine room ------------------------------------------------------------
 
 fn enqueue(sim: Sim, events: List(#(NodeId, node.Event))) -> Sim {
   Sim(..sim, queue: list.append(sim.queue, events))

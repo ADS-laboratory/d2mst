@@ -1,8 +1,4 @@
 //// Fragment identity.
-////
-//// During GHS construction a fragment is either a single sleeping/level-0
-//// node or is named after its core edge. Later tiers extend this with the
-//// (weight, node, counter) identities used by the dynamic repair protocols.
 
 import d2mst/graph.{type EdgeId, type NodeId}
 import gleam/option.{type Option}
@@ -10,6 +6,7 @@ import gleam/option.{type Option}
 pub type FragmentId {
   /// A level-0 fragment containing only the given node.
   Singleton(node: NodeId)
+  GHSCore(edge: EdgeId)
   /// A fragment containing multiple nodes is identified by its core edge.
   /// 
   /// - If the fragment is formed after an edge addition, the node Option is None.
@@ -20,5 +17,4 @@ pub type FragmentId {
   /// The counter is used to distinguish between old and new failures / additions of the
   /// same edge: the counter is incremented each time the edge is removed.
   D2MCore(edge: EdgeId, node: Option(NodeId), failures_counter: Int)
-  GHSCore(edge: EdgeId)
 }

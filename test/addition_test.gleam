@@ -1,7 +1,7 @@
 import d2mst/graph.{Edge, Graph}
+import engine/generator.{connected}
 import gleam/list
 import gleeunit/should
-import sim/generator.{connected}
 import sim/oracle.{check}
 import sim/runner.{type Sim, add_link, converge, fail_link, settle, summaries}
 

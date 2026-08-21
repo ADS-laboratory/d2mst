@@ -1,5 +1,5 @@
 import d2mst/addition.{add_edge, handle_add_message}
-import d2mst/d2m.{handle_d2m_message, remove_edge}
+import d2mst/failure.{handle_failure_message, remove_edge}
 import d2mst/ghs.{handle_ghs_message, wakeup}
 import d2mst/message
 import d2mst/node.{
@@ -8,6 +8,8 @@ import d2mst/node.{
 import gleam/dict
 import gleam/list
 
+/// The exposed function of the protocol, it handles an event and returns the new state and any
+/// effects that should be executed.
 pub fn handle(state: State, event: Event) -> #(State, List(Effect)) {
   let #(state, effects) = handle_event(state, event)
   let #(state, more) = drain(state)
@@ -56,7 +58,7 @@ fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
           case msg {
             message.GHSMsg(msg) -> handle_ghs_message(state, on, msg)
             message.D2MMsg(msg, fragment_id) ->
-              handle_d2m_message(state, on, msg, fragment_id)
+              handle_failure_message(state, on, msg, fragment_id)
             message.AddMsg(msg, fragment_id) ->
               handle_add_message(state, on, msg, fragment_id)
           }

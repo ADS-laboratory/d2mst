@@ -1,7 +1,7 @@
 //// Link actor: the communication channel between two neighboring nodes.
 ////
 //// Every edge of the graph is one of these processes, and the process *is*
-//// the edge: deleting the edge means killing the process — there is no
+//// the edge: deleting the edge means killing the process, there is no
 //// polite "failed" state. Endpoint nodes monitor their links and observe
 //// the death as a `LinkDown` event; a re-added edge is a brand new link
 //// process (and, protocol-wise, a brand new edge).

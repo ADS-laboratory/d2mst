@@ -16,7 +16,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 
 /// Dispatches a D2M message to the appropriate handler
-pub fn handle_d2m_message(
+pub fn handle_failure_message(
   state: State,
   on: EdgeId,
   msg: D2MMsg,

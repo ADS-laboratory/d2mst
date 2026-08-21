@@ -6,10 +6,10 @@ import d2mst/algorithm
 import d2mst/graph.{Edge, EdgeId, Graph}
 import d2mst/message
 import d2mst/node
+import engine/generator
 import engine/logger
 import gleam/list
 import gleam/option.{None, Some}
-import sim/generator
 import sim/oracle
 import sim/runner
 

@@ -151,6 +151,9 @@ pub fn reconstruct(history: List(Entry), ids: List(NodeId)) -> List(Summary) {
   |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
 }
 
+/// `history`'s call timeout when polled by `await_halt`
+const query_timeout_ms = 10_000
+
 /// Poll until every node in `ids` has reported a halted summary, or give up
 /// after `attempts`.
 pub fn await_halt(
@@ -162,7 +165,7 @@ pub fn await_halt(
   case attempts {
     0 -> Error(Nil)
     _ -> {
-      let s = reconstruct(history(lg, 1000), ids)
+      let s = reconstruct(history(lg, query_timeout_ms), ids)
       case
         list.length(s) == list.length(ids) && list.all(s, fn(r) { r.halted })
       {

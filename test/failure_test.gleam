@@ -1,10 +1,10 @@
 import d2mst/graph
 import d2mst/node
+import engine/generator.{connected}
 import gleam/int
 import gleam/list
 import gleam/option.{None}
 import gleeunit/should
-import sim/generator.{connected}
 import sim/oracle.{check}
 import sim/runner.{
   type Sim, add_link, add_node, converge, converge_with_strategy, crash_node,
