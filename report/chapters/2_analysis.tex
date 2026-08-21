@@ -14,11 +14,21 @@ No specific interface is required: the system should be able to operate without 
 
 % Everything about mode and transparencies: availability, mobility, security, fault tolerance, etc.
 % Are there execution time bounds? Minimum data rates?
-% If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services). 
+% If requested, specific platforms/languages/middlewares requirements for the implementation can be decided here. (E.g.: if the project is on a SOA, we may request that functions are offered via SOAP or RESTful services).
 
+% Transparencies: https://users.dimi.uniud.it/~gabriele.puppis/teaching/Distributed%20Systems/An_introduction/?step=24
 
-The system must be fault tolerant and support eventual convergence: edges and nodes may fail or be temporarily unavailable, but the service must continue operating and recover a correct state after a finite amount of time. From the point of view of the CAP theorem, the system is designed to be partition tolerant, since network partitions and temporary disconnections are an intrinsic property of the problem. The implementation therefore prioritizes availability and convergence over immediate global consistency, while keeping the internal reconfiguration of the MST transparent to the user.
+The system must be fault tolerant and support eventual convergence: edges and nodes may fail or be temporarily unavailable, but the service must continue operating and recover a correct state after a finite amount of time. From the point of view of the CAP theorem, the system is designed to be partition tolerant, since network partitions and temporary disconnections are an intrinsic property of the problem.
 
+The implementation prioritizes availability and convergence over immediate global consistency, specifically using eventual consistency. Because nodes possess only local knowledge, using global locks to synchronously update the tree during topological changes would be unfeasible and inefficient. Instead, changes are processed asynchronously. While events propagate, different nodes may temporarily hold a fragmented or outdated view of the spanning tree; however, the protocol guarantees that, once a sequence of topological changes ceases, all nodes will eventually converge to a single, consistent, and globally correct MST.
+
+To properly manage the distributed network, the system implements key transparencies:
+
+\begin{itemize}
+    \item \textbf{Failure transparency:} When a link fails, the system automatically runs a dynamic repair algorithm to find the minimum-weight outgoing edge (MOE) and reconnect the fragments, completely hiding the internal reconfiguration from the end user.
+    \item \textbf{Concurrency transparency:} The system hides race conditions that could arise from concurrent updates to the network structure. When multiple topological changes occur simultaneously, overlapping cycle formations are safely serialized by the root. This ensures that concurrent operations do not lead to deadlocks or state corruption.
+    \item \textbf{Location transparency:} Nodes do not require a global view of the network. They interact exclusively with their immediate neighbors and make decisions based solely on local state and fragment identities, effectively abstracting away the physical topology and scale of the distributed system.
+\end{itemize}
 
 % Cheng et al. : PA:
 % - eventual consistency: the system reaches a consistent state after a finite time
