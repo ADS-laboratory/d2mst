@@ -6,8 +6,9 @@ import d2mst/message.{
 import d2mst/node.{
   type Effect, type State, BinarySearch, D2MNodeState, EdgeInfo, MOESearch,
   Merge, Naive, Reiden, Rejected, Selected, Send, Sleeping, State, Undecided,
-  branch_edges_except, bump_failure_count, defer, failure_count,
-  min_undecided_edge, opt_less, sample_k, set_confirmed, set_status,
+  branch_edges_except, bump_failure_count, clear_addition_state, defer,
+  failure_count, min_undecided_edge, opt_less, sample_k, set_confirmed,
+  set_status,
 }
 import gleam/crypto
 import gleam/dict
@@ -142,6 +143,12 @@ fn on_report_failure(
 /// Root or intermediate node initiates/propagates RE-IDEN down tree branches.
 fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
   let children = branch_children(state)
+  // The fragment identity is about to change, so every addition message in
+  // flight under the old one will be silently discarded wherever it lands
+  // (see `message.add_is_intra_fragment`) -- any coordination state tied to
+  // it is dead. Clear it now (`clear_addition_state`) rather than leaving
+  // it stale.
+  let state = clear_addition_state(state)
   let state =
     State(
       ..state,
@@ -150,20 +157,6 @@ fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
       // A repair is now in progress: `addition.on_edge_test` reads this to
       // tell a stable fragment from one mid-recovery.
       halted: False,
-      // The fragment identity is about to change, so every addition
-      // message in flight under the old one will be silently discarded
-      // wherever it lands (see `message.add_is_intra_fragment`) -- any
-      // coordination state tied to it is dead. Clear it now rather than
-      // leaving it stale: in particular `addition_active`/`addition_queue`
-      // must not survive, or this node (if it stays root) would never
-      // grant the next event a turn once its stuck predecessor's `AddDone`
-      // never arrives.
-      pending_additions: dict.new(),
-      turn_routing: dict.new(),
-      ready_replace: dict.new(),
-      replace_wait_countdown: dict.new(),
-      addition_queue: [],
-      addition_active: None,
     )
 
   case children {
@@ -822,7 +815,16 @@ fn on_connect(
       let state = State(..state, fragment: new_fragment)
       case state.id < info.peer {
         True -> start_reiden_phase(State(..state, parent_edge: None))
-        False -> #(State(..state, parent_edge: Some(from)), [])
+        // The smaller-id side clears addition bookkeeping as part of
+        // `start_reiden_phase` above; this side's fragment just changed the
+        // same way, so it needs the same clearing (`clear_addition_state`)
+        // even though it won't call `start_reiden_phase` itself until the
+        // ReIden wave reaches it a moment later -- otherwise there's a
+        // window where a stale local entry and the new fragment id coexist.
+        False -> #(
+          clear_addition_state(State(..state, parent_edge: Some(from))),
+          [],
+        )
       }
     }
   }

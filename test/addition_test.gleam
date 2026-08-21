@@ -1,5 +1,10 @@
+import d2mst/addition
+import d2mst/fragment
 import d2mst/graph.{Edge, Graph}
+import d2mst/message
+import d2mst/node
 import engine/generator.{connected}
+import gleam/dict
 import gleam/list
 import gleeunit/should
 import sim/oracle.{check}
@@ -385,4 +390,81 @@ fn non_adjacent_pair(
 
 fn tree_edge_ids(sim: Sim) -> List(graph.EdgeId) {
   list.flatten(list.map(summaries(sim), fn(s) { s.tree_edges }))
+}
+
+/// Verifies that a rejected, non-pruning edge addition (should_prune: False) correctly
+/// clears its via_addition state so it remains eligible as a Minimum Outgoing Edge (MOE).
+/// When a critical tree edge later fails, the algorithm successfully discovers and
+/// selects this previously rejected edge to reconnect the disconnected graph fragments.
+pub fn noop_addition_edge_remains_eligible_as_moe_after_failure_test() {
+  let g =
+    Graph(nodes: [0, 1, 2, 3, 4], edges: [
+      Edge(0, 1, 1),
+      Edge(1, 2, 2),
+      Edge(2, 3, 3),
+      Edge(0, 4, 100),
+    ])
+  let sim = converge(g)
+  check(sim.graph, summaries(sim)) |> should.be_ok
+
+  // Cycle 0-1-2: max existing tree edge in it is edge(1, 2) (weight 2).
+  // The new edge (0, 2, 1000) is heavier, so this is a no-op: it must stay
+  // Undecided, unselected, and eligible for future MOE search.
+  let sim = add_link(sim, Edge(0, 2, 1000)) |> settle
+  check(sim.graph, summaries(sim)) |> should.be_ok
+  list.contains(tree_edge_ids(sim), graph.edge_id(0, 2)) |> should.be_false
+
+  // Fail edge(1, 2): the only remaining edge left connecting {2, 3} to the
+  // rest of the graph is the just-rejected (0, 2).
+  let sim = fail_link(sim, 1, 2) |> settle
+  check(sim.graph, summaries(sim)) |> should.be_ok
+  list.contains(tree_edge_ids(sim), graph.edge_id(0, 2)) |> should.be_true
+}
+
+/// Pending additions of older fragments must be ignored.
+pub fn stale_pending_addition_ignored_after_fragment_change_test() {
+  let edge_id = graph.edge_id(0, 2)
+  let old_fragment = fragment.Singleton(100)
+  let new_fragment = fragment.Singleton(200)
+
+  // Construct initial node state at new_fragment.
+  let initial_state =
+    node.State(
+      ..node.init(1, [Edge(0, 1, 10), Edge(1, 2, 20)]),
+      fragment: new_fragment,
+    )
+
+  // Simulate a stale addition entry stored under old_fragment.
+  let stale_msg =
+    message.Addition(
+      event_id: edge_id,
+      new_weight: 50,
+      origin: 0,
+      running_max: 50,
+      max_edge: edge_id,
+    )
+
+  let state_with_stale_entry =
+    node.State(
+      ..initial_state,
+      pending_additions: dict.from_list([
+        #(edge_id, #(stale_msg, edge_id, old_fragment)),
+      ]),
+    )
+
+  // Trigger on_addition with a live message arriving under new_fragment.
+  let #(updated_state, _effects) =
+    addition.on_addition(
+      state_with_stale_entry,
+      graph.edge_id(1, 2),
+      edge_id,
+      50,
+      2,
+      30,
+      graph.edge_id(0, 1),
+    )
+
+  // The stale entry is discarded, and the new message is stored in pending_additions.
+  dict.has_key(updated_state.ready_replace, edge_id) |> should.be_false
+  dict.has_key(updated_state.pending_additions, edge_id) |> should.be_true
 }

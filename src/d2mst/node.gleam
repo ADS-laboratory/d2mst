@@ -126,7 +126,16 @@ pub type State {
     bs_left: message.BsScan,
     bs_right: message.BsScan,
     /// Pending additions, waiting for the other branch to arrive at the LCA.
-    pending_additions: Dict(EdgeId, #(message.AddMsg, EdgeId)),
+    /// The third element is the fragment id this node had when the entry
+    /// was stored: a re-identification (Phase 1/2, or `d2m.on_connect`'s
+    /// merge) clears these outright (see `clear_addition_state`), but that
+    /// only catches the entry if *this* node is the one that re-identifies.
+    /// A relay node the abandoned round already passed through, sitting
+    /// just outside the re-identifying region, keeps its entry -- the tag
+    /// lets `addition.on_addition` recognize it as stale the next time a
+    /// live round for the same event_id passes through, instead of
+    /// wrongly treating it as a genuine sibling arrival.
+    pending_additions: Dict(EdgeId, #(message.AddMsg, EdgeId, FragmentId)),
     /// Every node strictly between an LCA and the root, on the path an
     /// `AddRequestTurn` travelled: event id -> the child edge to route the
     /// matching `Privilege` back down to. Never populated at the LCA
@@ -327,6 +336,33 @@ pub fn branch_edges_except(
       False -> Error(Nil)
     }
   })
+}
+
+/// Clears every piece of addition-response bookkeeping tied to this node's
+/// *current* fragment identity. Must be called anywhere `state.fragment` is
+/// reassigned (see `d2m.start_reiden_phase`/`d2m.on_connect`): any
+/// Addition/AddRequestTurn/Privilege/Replace/AddDone wave still travelling
+/// under the old identity gets silently discarded the instant it crosses a
+/// node that has already re-identified (`message.add_is_intra_fragment`),
+/// so the local state it left behind is dead and nothing else revisits it.
+/// Left uncleared, `addition_active` in particular can wedge a root
+/// forever: it only ever clears on a matching `AddDone`, which an orphaned
+/// event will never produce.
+///
+/// This only protects a node that itself re-identifies. A relay just
+/// outside the re-identifying region can still be left holding a stale
+/// `pending_additions` entry -- see that field's doc for the complementary,
+/// self-defending fix in `addition.on_addition`.
+pub fn clear_addition_state(state: State) -> State {
+  State(
+    ..state,
+    pending_additions: dict.new(),
+    turn_routing: dict.new(),
+    ready_replace: dict.new(),
+    replace_wait_countdown: dict.new(),
+    addition_queue: [],
+    addition_active: None,
+  )
 }
 
 /// None means infinity.

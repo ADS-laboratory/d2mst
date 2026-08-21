@@ -354,8 +354,11 @@ pub fn on_addition(
     )
 
   // Check if we already received an Addition for this event (LCA check).
+  // The stored fragment tag must still match ours.
   case dict.get(state.pending_additions, event_id) {
-    Ok(#(first_msg, first_msg_from_edge)) -> {
+    Ok(#(first_msg, first_msg_from_edge, stored_fragment))
+      if stored_fragment == state.fragment
+    -> {
       let assert message.Addition(..) = first_msg
       // We are the LCA. Now we update the topology. `winner` is the branch
       // that reported the larger running max (the one that actually holds
@@ -426,19 +429,17 @@ pub fn on_addition(
       // cycles serialization").
       relay_or_root(state, event_id)
     }
-    Error(_) -> {
-      // First Addition to arrive at this node: save it and forward upward.
-      // A non-root node with a still-unmatched Addition just waits here
-      // (returns to this same `Error` branch on `defer`/retry) until
-      // either a sibling arrives (promoting it to the `Ok` branch above)
-      // or it is itself forwarded on: neither case is "ready to ask the
-      // root for a turn" yet, so this does not call `relay_or_root`.
+    _ -> {
+      // First *live* Addition to arrive at this node: save it and forward
+      // upward. Reached both when there's genuinely no entry yet, and when
+      // the guard above rejected a stale one.
       let state =
         State(
           ..state,
           pending_additions: dict.insert(state.pending_additions, event_id, #(
             updated_msg,
             from_edge,
+            state.fragment,
           )),
         )
 
@@ -478,8 +479,16 @@ fn on_replace(
   let next_hop = case state.id == target_origin {
     True -> option.None
     False -> {
+      // No staleness check needed here (unlike `on_addition`'s): this
+      // Replace only exists because a Privilege already authorized it, and
+      // getting a Privilege at all requires this event to currently be
+      // `state.addition_active`/routed via a live `turn_routing` entry --
+      // both of which `clear_addition_state` wipes the instant this node's
+      // own fragment changes. So by the time we're here, either the entry
+      // is live, or it and the Replace that would have used it are already
+      // gone together.
       case dict.get(state.pending_additions, event_id) {
-        Ok(#(_msg, child_edge)) -> option.Some(child_edge)
+        Ok(#(_msg, child_edge, _fragment)) -> option.Some(child_edge)
         Error(_) -> option.None
       }
     }
@@ -521,7 +530,8 @@ fn on_replace(
   // actually something to prune.
   let state = case should_prune, dict.get(state.edges, max_edge) {
     True, Ok(info) -> {
-      let updated_info = EdgeInfo(..info, status: Undecided)
+      let updated_info =
+        EdgeInfo(..info, status: Undecided, via_addition: False)
       State(..state, edges: dict.insert(state.edges, max_edge, updated_info))
     }
     _, _ -> state
@@ -548,24 +558,39 @@ fn on_replace(
   // finished and lets the root move on.
   let #(state, done_effects) = case state.id == target_origin {
     True -> {
-      let state = case should_prune, dict.get(state.edges, event_id) {
-        True, Ok(info) -> {
-          // Cycle-path resolution: the LCA's decision plus the Replace wave
-          // routing it here already constitute mutual agreement between
-          // both origins -- there is no separate `Connect` handshake to
-          // wait for, so mark this confirmed immediately (see
-          // `EdgeInfo.confirmed`). Without this, this edge would sit at
-          // `Selected && !confirmed` forever, and a stray `AddTest` landing
-          // on it later would make `on_edge_test`'s peer-nudge branch fire
-          // with no way to ever reach `confirmed` on this path -- an
-          // infinite resend ping-pong between the two endpoints.
-          let updated_info = EdgeInfo(..info, status: Selected, confirmed: True)
+      let state = case dict.get(state.edges, event_id) {
+        Ok(info) -> {
+          // Either way, the addition round concludes for this edge here:
+          // clear `via_addition` so a no-op result (should_prune: False)
+          // doesn't leave it permanently hidden from `node.min_undecided_edge`'s
+          // Phase 3 search, as if a round were still in flight for it.
+          let updated_info = case should_prune {
+            True -> {
+              // Cycle-path resolution: the LCA's decision plus the Replace
+              // wave routing it here already constitute mutual agreement
+              // between both origins -- there is no separate `Connect`
+              // handshake to wait for, so mark this confirmed immediately
+              // (see `EdgeInfo.confirmed`). Without this, this edge would
+              // sit at `Selected && !confirmed` forever, and a stray
+              // `AddTest` landing on it later would make `on_edge_test`'s
+              // peer-nudge branch fire with no way to ever reach
+              // `confirmed` on this path -- an infinite resend ping-pong
+              // between the two endpoints.
+              EdgeInfo(
+                ..info,
+                status: Selected,
+                confirmed: True,
+                via_addition: False,
+              )
+            }
+            False -> EdgeInfo(..info, via_addition: False)
+          }
           State(
             ..state,
             edges: dict.insert(state.edges, event_id, updated_info),
           )
         }
-        _, _ -> state
+        Error(_) -> state
       }
       forward_or_finish(state, event_id)
     }
@@ -740,7 +765,7 @@ fn execute_or_route(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
 /// The LCA acting on its own stashed decision, now that it has been
 /// authorized. This is the direct continuation of `on_addition`'s old
 /// (pre-serialization) immediate-execution path, just deferred until now.
-fn execute_decision(
+pub fn execute_decision(
   state: State,
   event_id: EdgeId,
   decision: ReplaceDecision,
@@ -767,7 +792,7 @@ fn execute_decision(
           edges: dict.insert(
             state.edges,
             decision.max_edge,
-            EdgeInfo(..info, status: Undecided),
+            EdgeInfo(..info, status: Undecided, via_addition: False),
           ),
         )
       }
@@ -777,26 +802,30 @@ fn execute_decision(
     // `on_replace` promotes the new edge to `Selected` only on whichever
     // origin *receives* the wave. If we are ourselves one of the two
     // origins, promote our own side locally instead, since we will
-    // never receive our own message. Only when there is something to
-    // prune -- a no-op leaves the new edge unselected.
+    // never receive our own message. `status`/`confirmed` only change when
+    // there is something to prune -- a no-op leaves the new edge
+    // unselected -- but `via_addition` clears either way, same reasoning as
+    // `on_replace`'s matching fix: a no-op result must not permanently hide
+    // this edge from `node.min_undecided_edge`'s Phase 3 search.
     let target_is_self = decision.target_origin == state.id
     let other_is_self = decision.other_origin == state.id
-    let state = case
-      decision.should_prune && { target_is_self || other_is_self }
-    {
+    let state = case target_is_self || other_is_self {
       True -> {
-        // Same reasoning as `on_replace`: this is the self-origin case of
-        // the same cycle-path resolution, so it is confirmed the same way
-        // -- see the comment there.
         let assert Ok(info) = dict.get(state.edges, event_id)
-        State(
-          ..state,
-          edges: dict.insert(
-            state.edges,
-            event_id,
-            EdgeInfo(..info, status: Selected, confirmed: True),
-          ),
-        )
+        let updated_info = case decision.should_prune {
+          True ->
+            // Same reasoning as `on_replace`: this is the self-origin case
+            // of the same cycle-path resolution, so it is confirmed the
+            // same way -- see the comment there.
+            EdgeInfo(
+              ..info,
+              status: Selected,
+              confirmed: True,
+              via_addition: False,
+            )
+          False -> EdgeInfo(..info, via_addition: False)
+        }
+        State(..state, edges: dict.insert(state.edges, event_id, updated_info))
       }
       False -> state
     }
