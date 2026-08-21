@@ -177,16 +177,14 @@ fn on_edge_test(
                   // partitioned.
                   case state.parent_edge {
                     // If we are the root, we can merge the two fragments
-                    // directly if no addition/merge is currently active.
+                    // directly if no addition/merge is currently active --
+                    // or preempt whatever is active if `eid` canonically
+                    // outranks it, or else queue for a turn later (see
+                    // `preempt_or_keep`).
                     None ->
-                      case state.addition_active == option.None {
-                        True -> {
-                          let state =
-                            State(..state, addition_active: option.Some(eid))
-                          merge(state, eid, info, [])
-                        }
-                        False -> #(state, [])
-                      }
+                      preempt_or_keep(state, eid, fn(s) {
+                        approve_merge(s, eid)
+                      })
                     // Otherwise, we ask the root to authorize the merge.
                     Some(parent_edge) -> {
                       // Send a request to the root to merge using this new
@@ -251,21 +249,14 @@ fn on_request_merge(
   let is_root = state.parent_edge == option.None
   case is_root {
     True -> {
-      case
-        state.addition_active == option.None
-        && { state.ns == Sleeping || state.halted }
-      {
-        True -> {
-          // The root approves the merge. Broadcast the approval down the tree.
-          let state = State(..state, addition_active: option.Some(add_edge))
-          let msg = message.AddApproveMergePartition(add_edge)
-          let envelope = message.AddMsg(msg, fragment: state.fragment)
-          #(state, broadcast_to_tree(state, option.None, envelope))
-        }
+      case state.ns == Sleeping || state.halted {
+        True ->
+          preempt_or_keep(state, add_edge, fn(s) { approve_merge(s, add_edge) })
         False -> {
-          // Busy with another addition or merge in progress; drop request.
-          // When the current operation settles, retry_abandoned_additions
-          // will re-probe all undecided via_addition edges.
+          // A failure repair is in progress here, not just another
+          // addition: drop request. When the current operation settles,
+          // retry_abandoned_additions will re-probe all undecided
+          // via_addition edges.
           #(state, [])
         }
       }
@@ -300,6 +291,118 @@ fn on_approve_merge(
       // We do not own the target edge: forward the approval.
       #(state, effects)
     }
+  }
+}
+
+/// Root-only: commit this root to `add_edge` (set `addition_active`) and
+/// either merge immediately, if this root itself owns the edge (the Case-1
+/// direct path in `on_edge_test`), or broadcast the approval down the tree
+/// for whichever descendant does (the `AddRequestMergePartition` path).
+/// Unifying both into one function is what lets `root_try_start` retry a
+/// queued `pending_merges` entry without caring which of the two situations
+/// originally queued it.
+///
+/// When this root owns `add_edge` itself, it must not claim the slot for an
+/// edge that is no longer eligible (`via_addition` already cleared, or
+/// already `Selected` from some other path -- both possible if this call
+/// came from `pending_merges` and time passed between queuing and this
+/// retry, e.g. the two fragments meanwhile merged some other way and
+/// `retry_abandoned_additions` already resolved this exact edge as an
+/// ordinary same-fragment cycle). `merge` itself would just silently no-op
+/// on a `Selected` edge without ever sending `Connect` -- and with
+/// `addition_active` already set, nothing would ever produce the `AddDone`
+/// needed to free it again, wedging this root forever. Skip straight to the
+/// next candidate instead. A remotely-owned edge can't be checked this way
+/// (this root has no visibility into the owner's status); `merge`'s own
+/// idempotency guard still protects that side from acting twice, at the
+/// cost of the same root-wedge risk in that narrower, harder-to-hit case.
+fn approve_merge(state: State, add_edge: EdgeId) -> #(State, List(Effect)) {
+  case dict.get(state.edges, add_edge) {
+    Ok(info) if info.status == Undecided && info.via_addition -> {
+      let state = State(..state, addition_active: option.Some(add_edge))
+      merge(state, add_edge, info, [])
+    }
+    Ok(_) -> root_try_start(state)
+    Error(_) -> {
+      let state = State(..state, addition_active: option.Some(add_edge))
+      let msg = message.AddApproveMergePartition(add_edge)
+      let envelope = message.AddMsg(msg, fragment: state.fragment)
+      #(state, broadcast_to_tree(state, option.None, envelope))
+    }
+  }
+}
+
+/// Root-only: run `execute` (which commits this root to `candidate`, i.e.
+/// sets `addition_active`) if the root is currently free, or if `candidate`
+/// canonically outranks whatever is already active; otherwise queue
+/// `candidate` in `pending_merges` for its turn once the active one settles.
+///
+/// Two different new edges concurrently reconnecting the very same pair of
+/// fragments get decided by each fragment's *own* root independently --
+/// there is no message exchange between the two roots to agree on one, so
+/// both must break the tie the same way without talking to each other.
+/// Ordering on the bare `EdgeId` (not weight: a request arriving via
+/// `AddRequestMergePartition` only carries the id, not the edge, and the
+/// root does not necessarily own it) is enough: both roots see the same
+/// pair of ids and pick the same winner.
+///
+/// Abandoning an already-active `candidate` must also retract the local
+/// commitment it made: `state.edges[current]` was set `Selected` (and a
+/// `Connect` sent) the moment it became active, via the Case-1 direct path
+/// in `on_edge_test` where the root is necessarily the edge's own owner --
+/// left in place, that stale `Selected` and the new winner's own `Selected`
+/// together form an actual cycle in the tree (two edges both marked as
+/// spanning the same fragment pair), and a `ReIden` wave started over the
+/// new winner loops through it forever instead of terminating. Retracting
+/// is safe: a mutual `Connect` would already have reassigned this root's own
+/// fragment (clearing `addition_active` via `node.clear_addition_state`
+/// before we'd ever get here), so `Selected`-but-unconfirmed is local-only
+/// state nothing else depends on yet.
+///
+/// Queuing (rather than dropping outright) matters even when `candidate`
+/// loses the tie-break: the operation currently occupying `addition_active`
+/// may be an ordinary same-fragment cycle resolution with no relation to
+/// `candidate`'s target fragment at all, and it *will* finish and free the
+/// slot via `handle_root_add_done` -- but nothing else would ever come back
+/// and re-ask on `candidate`'s behalf (confirmed reproducible: seed 4, i=20
+/// of `fuzz_long_running_random_topology_test` -- a same-fragment cycle
+/// event occupies the root exactly while a new singleton node's merge
+/// request arrives, the request is dropped, and since no failure repair is
+/// involved the requester never re-enters `Sleeping` to trigger
+/// `retry_abandoned_additions` either, stranding the singleton as a
+/// permanent extra root).
+fn preempt_or_keep(
+  state: State,
+  candidate: EdgeId,
+  execute: fn(State) -> #(State, List(Effect)),
+) -> #(State, List(Effect)) {
+  case state.addition_active {
+    option.None -> execute(state)
+    option.Some(current) ->
+      case graph.edge_id_less(candidate, current) {
+        True -> execute(retract(state, current))
+        False -> #(
+          State(
+            ..state,
+            pending_merges: list.append(state.pending_merges, [candidate]),
+          ),
+          [],
+        )
+      }
+  }
+}
+
+/// Reset an edge this node itself decided (`Selected`, not yet `confirmed`)
+/// back to `Undecided`, so it is reconsidered fresh instead of being left as
+/// a dangling stale commitment. A no-op if this node isn't the edge's owner
+/// or the edge was never locally decided.
+fn retract(state: State, eid: EdgeId) -> State {
+  case dict.get(state.edges, eid) {
+    Ok(info) if info.status == Selected && !info.confirmed -> {
+      let updated = EdgeInfo(..info, status: Undecided)
+      State(..state, edges: dict.insert(state.edges, eid, updated))
+    }
+    _ -> state
   }
 }
 
@@ -725,13 +828,14 @@ fn root_enqueue(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
   root_try_start(state)
 }
 
-/// Root only: if free, pop the head of the queue and grant it a turn.
+/// Root only: if free, pop the head of the same-fragment LCA queue and
+/// grant it a turn; if that's empty, fall back to a queued cross-fragment
+/// merge request instead (see `preempt_or_keep`'s `pending_merges` doc).
 fn root_try_start(state: State) -> #(State, List(Effect)) {
   case state.addition_active {
     Some(_) -> #(state, [])
     None ->
       case state.addition_queue {
-        [] -> #(state, [])
         [event_id, ..rest] -> {
           let state =
             State(
@@ -741,6 +845,14 @@ fn root_try_start(state: State) -> #(State, List(Effect)) {
             )
           execute_or_route(state, event_id)
         }
+        [] ->
+          case state.pending_merges {
+            [] -> #(state, [])
+            [add_edge, ..rest] -> {
+              let state = State(..state, pending_merges: rest)
+              approve_merge(state, add_edge)
+            }
+          }
       }
   }
 }

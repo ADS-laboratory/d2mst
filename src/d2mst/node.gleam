@@ -152,6 +152,11 @@ pub type State {
     /// Root-side: the event currently authorized to run, if any. The root
     /// only grants the next queued event once this clears.
     addition_active: Option(EdgeId),
+    /// Root-side: cross-fragment merge requests that arrived while
+    /// `addition_active` was already busy with something else and lost
+    /// `preempt_or_keep`'s tie-break, in arrival order. Retried, one at a
+    /// time, every time `addition_active` frees up
+    pending_merges: List(EdgeId),
   )
 }
 
@@ -236,6 +241,7 @@ pub fn init_with_strategy(
     replace_wait_countdown: dict.new(),
     addition_queue: [],
     addition_active: None,
+    pending_merges: [],
   )
 }
 
@@ -362,6 +368,7 @@ pub fn clear_addition_state(state: State) -> State {
     replace_wait_countdown: dict.new(),
     addition_queue: [],
     addition_active: None,
+    pending_merges: [],
   )
 }
 

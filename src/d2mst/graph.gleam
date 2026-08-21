@@ -25,17 +25,23 @@ pub type Edge {
   Edge(u: NodeId, v: NodeId, weight: Int)
 }
 
+fn compare_edge_id(a: EdgeId, b: EdgeId) -> Order {
+  case int.compare(a.low, b.low) {
+    order.Eq -> int.compare(a.high, b.high)
+    o -> o
+  }
+}
+
+pub fn edge_id_less(a: EdgeId, b: EdgeId) -> Bool {
+  compare_edge_id(a, b) == order.Lt
+}
+
 /// Lexicographic order on (weight, edge id): total and unique per edge even
 /// when raw weights collide.
 pub fn compare_edge(a: Edge, b: Edge) -> Order {
   case int.compare(a.weight, b.weight) {
     order.Eq -> {
-      let ia = edge_id(a.u, a.v)
-      let ib = edge_id(b.u, b.v)
-      case int.compare(ia.low, ib.low) {
-        order.Eq -> int.compare(ia.high, ib.high)
-        o -> o
-      }
+      compare_edge_id(edge_id(a.u, a.v), edge_id(b.u, b.v))
     }
     o -> o
   }
