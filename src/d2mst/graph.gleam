@@ -123,18 +123,24 @@ pub fn remove_edge(g: Graph, id: EdgeId) -> Graph {
 
 /// The unique MST forest of the graph (one tree per connected component),
 /// used as the reference the distributed protocol is validated against.
+///
+/// Union-find with path compression and union by size
 pub fn kruskal(g: Graph) -> List(Edge) {
   let sorted = list.sort(g.edges, compare_edge)
   let parents =
     list.fold(g.nodes, dict.new(), fn(d, n) { dict.insert(d, n, n) })
-  let #(_, mst) =
-    list.fold(sorted, #(parents, []), fn(acc, e) {
-      let #(parents, mst) = acc
-      let ru = find(parents, e.u)
-      let rv = find(parents, e.v)
+  let sizes = list.fold(g.nodes, dict.new(), fn(d, n) { dict.insert(d, n, 1) })
+  let #(_, _, mst) =
+    list.fold(sorted, #(parents, sizes, []), fn(acc, e) {
+      let #(parents, sizes, mst) = acc
+      let #(parents, ru) = find(parents, e.u)
+      let #(parents, rv) = find(parents, e.v)
       case ru == rv {
-        True -> acc
-        False -> #(dict.insert(parents, ru, rv), [e, ..mst])
+        True -> #(parents, sizes, mst)
+        False -> {
+          let #(parents, sizes) = union(parents, sizes, ru, rv)
+          #(parents, sizes, [e, ..mst])
+        }
       }
     })
   mst
@@ -145,13 +151,36 @@ pub fn components(g: Graph) -> Int {
   list.length(g.nodes) - list.length(kruskal(g))
 }
 
-fn find(parents: Dict(NodeId, NodeId), n: NodeId) -> NodeId {
+fn find(
+  parents: Dict(NodeId, NodeId),
+  n: NodeId,
+) -> #(Dict(NodeId, NodeId), NodeId) {
   case dict.get(parents, n) {
-    Ok(p) ->
-      case p == n {
-        True -> n
-        False -> find(parents, p)
-      }
-    Error(_) -> n
+    Ok(p) if p == n -> #(parents, n)
+    Ok(p) -> {
+      let #(parents, root) = find(parents, p)
+      #(dict.insert(parents, n, root), root)
+    }
+    Error(_) -> #(parents, n)
+  }
+}
+
+fn union(
+  parents: Dict(NodeId, NodeId),
+  sizes: Dict(NodeId, Int),
+  ru: NodeId,
+  rv: NodeId,
+) -> #(Dict(NodeId, NodeId), Dict(NodeId, Int)) {
+  let su = case dict.get(sizes, ru) {
+    Ok(s) -> s
+    Error(_) -> 1
+  }
+  let sv = case dict.get(sizes, rv) {
+    Ok(s) -> s
+    Error(_) -> 1
+  }
+  case su >= sv {
+    True -> #(dict.insert(parents, rv, ru), dict.insert(sizes, ru, su + sv))
+    False -> #(dict.insert(parents, ru, rv), dict.insert(sizes, rv, su + sv))
   }
 }

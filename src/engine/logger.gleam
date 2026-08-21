@@ -1,10 +1,7 @@
 //// Central logging service.
 ////
 //// This is an *interface* component: the protocol never depends on it and
-//// the system keeps working if it crashes. It does not keep any
-//// materialized view of the network — it only records what nodes report
-//// (`Sent`, one per protocol message transmitted; `StateChanged`, a node's
-//// latest `Summary`) as a single ordered `history`.
+//// the system keeps working if it crashes. 
 
 import d2mst/fragment
 import d2mst/graph.{type EdgeId, type NodeId}
@@ -50,28 +47,20 @@ pub fn summarise(state: node.State) -> Summary {
   )
 }
 
-pub type Event {
-  MessageSent(by: NodeId)
-  StateUpdated(summary: Summary)
-}
-
-pub type Entry {
-  Entry(seq: Int, event: Event)
-}
-
 pub type Msg {
   Sent(by: NodeId)
   StateChanged(summary: Summary)
-  GetHistory(reply: Subject(List(Entry)))
+  GetLatest(reply: Subject(Dict(NodeId, Summary)))
+  GetCounts(reply: Subject(Dict(NodeId, Int)))
   Reset
 }
 
 type State {
-  State(log: List(Entry), seq: Int)
+  State(latest: Dict(NodeId, Summary), counts: Dict(NodeId, Int))
 }
 
 fn empty() -> State {
-  State(log: [], seq: 0)
+  State(latest: dict.new(), counts: dict.new())
 }
 
 pub fn start() -> Subject(Msg) {
@@ -87,43 +76,55 @@ pub fn start() -> Subject(Msg) {
 
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Sent(by) -> record(state, MessageSent(by))
-    StateChanged(summary) -> record(state, StateUpdated(summary))
-    GetHistory(reply) -> {
-      process.send(reply, list.reverse(state.log))
+    Sent(by) -> {
+      let counts =
+        dict.upsert(state.counts, by, fn(n) {
+          case n {
+            Some(n) -> n + 1
+            None -> 1
+          }
+        })
+      actor.continue(State(..state, counts:))
+    }
+    StateChanged(summary) -> {
+      let latest = dict.insert(state.latest, summary.id, summary)
+      actor.continue(State(..state, latest:))
+    }
+    GetLatest(reply) -> {
+      process.send(reply, state.latest)
+      actor.continue(state)
+    }
+    GetCounts(reply) -> {
+      process.send(reply, state.counts)
       actor.continue(state)
     }
     Reset -> actor.continue(empty())
   }
 }
 
-fn record(state: State, event: Event) -> actor.Next(State, Msg) {
-  let entry = Entry(state.seq, event)
-  actor.continue(State(log: [entry, ..state.log], seq: state.seq + 1))
+/// The call timeout used to poll the logger actor.
+const query_timeout_ms = 10_000
+
+/// Fetch the latest reported `Summary` per node.
+pub fn latest(lg: Subject(Msg), timeout: Int) -> Dict(NodeId, Summary) {
+  process.call(lg, timeout, GetLatest)
 }
 
-// ---------------------------------------------------------------------------
-// Reconstruction: pure folds over a history, usable live or offline.
-// ---------------------------------------------------------------------------
-
-pub fn history(lg: Subject(Msg), timeout: Int) -> List(Entry) {
-  process.call(lg, timeout, GetHistory)
+/// `latest`'s entries restricted to `ids`, sorted by node id. Nodes with no
+/// `StateChanged` report yet (or no longer part of the network, e.g.
+/// crashed) are not in the result.
+pub fn reconstruct(
+  latest: Dict(NodeId, Summary),
+  ids: List(NodeId),
+) -> List(Summary) {
+  ids
+  |> list.filter_map(fn(id) { dict.get(latest, id) })
+  |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
 }
 
-/// Per-node message counts, folded from `history`.
-pub fn counts(history: List(Entry)) -> Dict(NodeId, Int) {
-  list.fold(history, dict.new(), fn(acc, e) {
-    case e.event {
-      MessageSent(by) ->
-        dict.upsert(acc, by, fn(n) {
-          case n {
-            Some(n) -> n + 1
-            None -> 1
-          }
-        })
-      StateUpdated(_) -> acc
-    }
-  })
+/// Fetch the running per-node message counts.
+pub fn counts(lg: Subject(Msg), timeout: Int) -> Dict(NodeId, Int) {
+  process.call(lg, timeout, GetCounts)
 }
 
 /// Total number of protocol messages recorded.
@@ -134,25 +135,6 @@ pub fn total(counts: Dict(NodeId, Int)) -> Int {
 pub fn format_counts(counts: Dict(NodeId, Int)) -> String {
   "messages sent: " <> int.to_string(total(counts))
 }
-
-/// The latest known summary of every node in `ids`, folded from `history`.
-/// Nodes with no `StateUpdated` entry (or no longer part of the network,
-/// e.g. crashed) are not in the result.
-pub fn reconstruct(history: List(Entry), ids: List(NodeId)) -> List(Summary) {
-  let latest =
-    list.fold(history, dict.new(), fn(acc, e) {
-      case e.event {
-        StateUpdated(s) -> dict.insert(acc, s.id, s)
-        MessageSent(_) -> acc
-      }
-    })
-  ids
-  |> list.filter_map(fn(id) { dict.get(latest, id) })
-  |> list.sort(fn(a, b) { int.compare(a.id, b.id) })
-}
-
-/// `history`'s call timeout when polled by `await_halt`
-const query_timeout_ms = 10_000
 
 /// Poll until every node in `ids` has reported a halted summary, or give up
 /// after `attempts`.
@@ -165,7 +147,7 @@ pub fn await_halt(
   case attempts {
     0 -> Error(Nil)
     _ -> {
-      let s = reconstruct(history(lg, query_timeout_ms), ids)
+      let s = reconstruct(latest(lg, query_timeout_ms), ids)
       case
         list.length(s) == list.length(ids) && list.all(s, fn(r) { r.halted })
       {

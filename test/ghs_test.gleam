@@ -98,7 +98,7 @@ pub fn delete_non_tree_link_test() {
   // system must still be consistent.
   let net = network.fail_link(net, 0, 2)
   process.sleep(50)
-  let summaries = logger.reconstruct(logger.history(lg, 1000), net.graph.nodes)
+  let summaries = logger.reconstruct(logger.latest(lg, 1000), net.graph.nodes)
   assert oracle.check(net.graph, summaries) == Ok(Nil)
 }
 
@@ -113,7 +113,7 @@ pub fn delete_tree_link_liveness_test() {
   let assert Ok(_) = logger.await_halt(lg, net.graph.nodes, 200, 10)
   let net = network.fail_link(net, 0, 1)
   process.sleep(50)
-  let summaries = logger.reconstruct(logger.history(lg, 1000), net.graph.nodes)
+  let summaries = logger.reconstruct(logger.latest(lg, 1000), net.graph.nodes)
   assert list.length(summaries) == 3
 }
 
@@ -132,7 +132,7 @@ pub fn node_crash_cascades_to_links_test() {
   process.sleep(100)
   assert !process.is_alive(l01.pid)
   assert !process.is_alive(l02.pid)
-  let summaries = logger.reconstruct(logger.history(lg, 1000), net.graph.nodes)
+  let summaries = logger.reconstruct(logger.latest(lg, 1000), net.graph.nodes)
   assert list.length(summaries) == 2
 }
 
@@ -147,7 +147,7 @@ pub fn add_link_test() {
   // protocol itself is tier 3.
   let net = network.add_link(net, Edge(0, 2, 10))
   process.sleep(50)
-  let summaries = logger.reconstruct(logger.history(lg, 1000), net.graph.nodes)
+  let summaries = logger.reconstruct(logger.latest(lg, 1000), net.graph.nodes)
   assert oracle.check(net.graph, summaries) == Ok(Nil)
 }
 
@@ -166,7 +166,7 @@ pub fn add_node_test() {
   assert process.is_alive(h.pid)
   assert dict.has_key(net.links, graph.edge_id(1, 2))
   assert net.graph.nodes == [2, 0, 1]
-  assert list.length(logger.reconstruct(logger.history(lg, 1000), [2])) == 1
+  assert list.length(logger.reconstruct(logger.latest(lg, 1000), [2])) == 1
 }
 
 pub fn message_complexity_is_recorded_test() {
@@ -176,5 +176,5 @@ pub fn message_complexity_is_recorded_test() {
   let net = network.start(g, lg)
   network.wake_all(net)
   let assert Ok(_) = logger.await_halt(lg, net.graph.nodes, 200, 10)
-  assert logger.total(logger.counts(logger.history(lg, 1000))) > 0
+  assert logger.total(logger.counts(lg, 1000)) > 0
 }
