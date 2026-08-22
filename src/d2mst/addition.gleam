@@ -186,8 +186,12 @@ fn on_edge_test(
 }
 
 // --------------------------------------------------------- //
-//                            LCA                            //
+//                        LCA Search                         //
 // --------------------------------------------------------- //
+// Endpoints are in the same fragment, so the new edge forms a cycle. We search for the
+// LCA by propagating the `Addition` message up the tree from both endpoints, carrying the
+// running maximum weight along the path. The first node to receive both messages is the
+// LCA, which decides which edge to remove (the heaviest).
 
 pub fn on_addition(
   state: State,
@@ -220,16 +224,16 @@ pub fn on_addition(
       max_edge: updated_max_edge,
     )
 
-  // Check if we already received an Addition for this event (LCA check).
-  // The stored fragment tag must still match ours.
+  // Check if we already received an Addition for this event (LCA check). The stored
+  // fragment tag must still match ours.
   case dict.get(state.pending_additions, event_id) {
     Ok(#(first_msg, first_msg_from_edge, stored_fragment))
       if stored_fragment == state.fragment
     -> {
       let assert message.Addition(..) = first_msg
-      // We are the LCA. Now we update the topology. `winner` is the branch
-      // that reported the larger running max (the one that actually holds
-      // the cycle's heaviest edge); `other_*` is the losing branch's own
+      // We are the LCA. Now we update the topology. `winner` is the branch that reported
+      // the larger running max (the one that holds the cycle's heaviest edge); `other_*`
+      // is the losing branch's own
       // origin/routing edge, needed below to attach *its* side of the new
       // edge too.
       let winner_is_first =
@@ -249,21 +253,13 @@ pub fn on_addition(
         True -> first_msg.max_edge
         False -> updated_max_edge
       }
-      let target_origin = case winner_is_first {
-        True -> first_msg.origin
-        False -> origin
+      let #(target_origin, other_origin) = case winner_is_first {
+        True -> #(first_msg.origin, origin)
+        False -> #(origin, first_msg.origin)
       }
-      let next_edge = case winner_is_first {
-        True -> first_msg_from_edge
-        False -> from_edge
-      }
-      let other_origin = case winner_is_first {
-        True -> origin
-        False -> first_msg.origin
-      }
-      let other_next_edge = case winner_is_first {
-        True -> from_edge
-        False -> first_msg_from_edge
+      let #(next_edge, other_next_edge) = case winner_is_first {
+        True -> #(first_msg_from_edge, from_edge)
+        False -> #(from_edge, first_msg_from_edge)
       }
 
       let already_at_max_edge = next_edge == max_edge
@@ -293,18 +289,14 @@ pub fn on_addition(
           ready_replace: dict.insert(state.ready_replace, event_id, decision),
         )
 
-      // We have a decision, but must not act on it yet: another
-      // concurrently-converging LCA elsewhere in the fragment might have
-      // its own decision pending too, and if our cycles overlap, running
-      // both at once could remove/reverse the same edge twice. Ask the
-      // root for a turn instead of acting (report ch. 3, "Overlapping
-      // cycles serialization").
+      // We have a decision, but must not act on it yet: another concurrently-converging
+      // LCA elsewhere in the fragment might have its own decision pending too, and if the
+      // cycles overlap, running both at once could remove/reverse the same edge twice.
+      // Ask the root for a turn.
       relay_or_root(state, event_id)
     }
     _ -> {
-      // First *live* Addition to arrive at this node: save it and forward
-      // upward. Reached both when there's genuinely no entry yet, and when
-      // the guard above rejected a stale one.
+      // First Addition to arrive at this node: save it and forward upward.
       let state =
         State(
           ..state,
@@ -326,6 +318,64 @@ pub fn on_addition(
         }
       }
     }
+  }
+}
+
+// --------------------------------------------------------- //
+//                  Addition Serialization                   //
+// --------------------------------------------------------- //
+
+/// Send our request for a turn to our parent, or enqueue it ourselves if we are the root.
+fn relay_or_root(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
+  case state.parent_edge {
+    Some(parent_edge) -> {
+      let msg = message.AddRequestTurn(event_id:)
+      #(state, [
+        node.Send(parent_edge, message.AddMsg(msg, fragment: state.fragment)),
+      ])
+    }
+    None -> root_enqueue(state, event_id)
+  }
+}
+
+/// Root only: queue an event and try to start it (or whatever is next in line).
+fn root_enqueue(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
+  let state =
+    State(
+      ..state,
+      addition_queue: list.append(state.addition_queue, [event_id]),
+    )
+  root_try_start(state)
+}
+
+// TODO: finish to move stuff here and shorten comments
+
+/// Root only: if free, pop the head of the same-fragment LCA queue and grant it a turn;
+/// if that's empty, fall back to a queued cross-fragment
+/// merge request instead (see `preempt_or_keep`'s `pending_merges` doc).
+fn root_try_start(state: State) -> #(State, List(Effect)) {
+  case state.addition_active {
+    Some(_) -> #(state, [])
+    None ->
+      case state.addition_queue {
+        [event_id, ..rest] -> {
+          let state =
+            State(
+              ..state,
+              addition_queue: rest,
+              addition_active: Some(event_id),
+            )
+          execute_or_route(state, event_id)
+        }
+        [] ->
+          case state.pending_merges {
+            [] -> #(state, [])
+            [add_edge, ..rest] -> {
+              let state = State(..state, pending_merges: rest)
+              approve_merge(state, add_edge)
+            }
+          }
+      }
   }
 }
 
@@ -741,74 +791,6 @@ fn on_add_done(
             )
           forward_or_finish(state, event_id)
         }
-      }
-  }
-}
-
-// --- Root-side serialization (report ch. 3, "Overlapping cycles
-// serialization") ------------------------------------------------------------
-//
-// An LCA computes its decision as soon as both `Addition` branches
-// converge (see `on_addition`), but must not act on it right away: a
-// different LCA elsewhere in the fragment might be mid-decision too, and if
-// the two cycles share a tree edge, running both at once could remove or
-// reverse it twice. So instead the LCA asks the root for a turn
-// (`AddRequestTurn`) and stashes the decision in `ready_replace` until a
-// `Privilege` grants it. The root queues requests in arrival order and only
-// ever has one event active (`addition_active`) at a time, moving to the
-// next once both branches of the current one report done (`AddDone`,
-// counted down in `replace_wait_countdown`).
-
-/// Send our request for a turn to our parent, or -- if we have none, i.e.
-/// we are the root -- enqueue it ourselves.
-fn relay_or_root(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
-  case state.parent_edge {
-    Some(parent_edge) -> {
-      let msg = message.AddRequestTurn(event_id:)
-      #(state, [
-        node.Send(parent_edge, message.AddMsg(msg, fragment: state.fragment)),
-      ])
-    }
-    None -> root_enqueue(state, event_id)
-  }
-}
-
-/// Root only: queue an event and try to start it (or whatever is next in
-/// line, if something else is already running).
-fn root_enqueue(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
-  let state =
-    State(
-      ..state,
-      addition_queue: list.append(state.addition_queue, [event_id]),
-    )
-  root_try_start(state)
-}
-
-/// Root only: if free, pop the head of the same-fragment LCA queue and
-/// grant it a turn; if that's empty, fall back to a queued cross-fragment
-/// merge request instead (see `preempt_or_keep`'s `pending_merges` doc).
-fn root_try_start(state: State) -> #(State, List(Effect)) {
-  case state.addition_active {
-    Some(_) -> #(state, [])
-    None ->
-      case state.addition_queue {
-        [event_id, ..rest] -> {
-          let state =
-            State(
-              ..state,
-              addition_queue: rest,
-              addition_active: Some(event_id),
-            )
-          execute_or_route(state, event_id)
-        }
-        [] ->
-          case state.pending_merges {
-            [] -> #(state, [])
-            [add_edge, ..rest] -> {
-              let state = State(..state, pending_merges: rest)
-              approve_merge(state, add_edge)
-            }
-          }
       }
   }
 }
