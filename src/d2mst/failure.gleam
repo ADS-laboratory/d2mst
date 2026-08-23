@@ -4,10 +4,10 @@ import d2mst/message.{
   type D2MMsg, Connect, D2MMsg, SignalConnect, fail_is_intra_fragment,
 }
 import d2mst/node.{
-  type Effect, type State, BinarySearch, D2MNodeState, EdgeInfo, MOESearch,
-  Merge, Naive, Reiden, Rejected, Selected, Send, Sleeping, State, Undecided,
-  branch_edges_except, bump_failure_count, clear_addition_state, defer,
-  failure_count, min_undecided_edge, opt_less, sample_k, set_confirmed,
+  type EdgeInfo, type Effect, type State, BinarySearch, D2MNodeState, EdgeInfo,
+  MOESearch, Merge, Naive, Reiden, Rejected, Selected, Send, Sleeping, State,
+  Undecided, branch_edges_except, bump_failure_count, clear_addition_state,
+  defer, failure_count, min_undecided_edge, opt_less, sample_k, set_confirmed,
   set_status,
 }
 import gleam/crypto
@@ -88,6 +88,8 @@ pub fn remove_edge(state: State, on: EdgeId) -> #(State, List(Effect)) {
       test_edge: forget(state.test_edge),
       best_edge:,
       best_wt:,
+      // Invalidate the BinarySearch candidate cache
+      bs_candidates: None,
     )
 
   // Increment the failure count for this edge
@@ -233,7 +235,9 @@ fn start_repair_search(state: State) -> #(State, List(Effect)) {
         _ -> info
       }
     })
-  let state = State(..state, edges:, ns: D2MNodeState(MOESearch))
+  // A fresh search must not reuse a cache built for a previous one.
+  let state =
+    State(..state, edges:, ns: D2MNodeState(MOESearch), bs_candidates: None)
   case state.moe_strategy {
     Naive -> start_repair_search_naive(state)
     BinarySearch(..) -> start_bs_round(state)
@@ -388,7 +392,8 @@ fn on_probe_reply(
 /// Root or node starts the search's initial round: an unfiltered scan of
 /// the whole fragment, to establish the first (lo, hi) and sample.
 fn start_bs_round(state: State) -> #(State, List(Effect)) {
-  let scan = bs_scan_all(state)
+  let #(state, edges) = ensure_bs_candidates(state)
+  let scan = bs_scan_all_sorted(edges, sample_k(state))
   let state = State(..state, ns: D2MNodeState(MOESearch), bs_scan: scan)
   let children = branch_children(state)
   let state = State(..state, find_countdown: list.length(children))
@@ -479,8 +484,10 @@ fn start_bs_split(
   pivot: Edge,
   hi: Edge,
 ) -> #(State, List(Effect)) {
-  let left = bs_scan_range(state, Incl(lo), pivot)
-  let right = bs_scan_range(state, Excl(pivot), hi)
+  let #(state, edges) = ensure_bs_candidates(state)
+  let k = sample_k(state)
+  let left = bs_scan_range_sorted(edges, k, Incl(lo), pivot)
+  let right = bs_scan_range_sorted(edges, k, Excl(pivot), hi)
   let state =
     State(..state, ns: D2MNodeState(MOESearch), bs_left: left, bs_right: right)
   let children = branch_children(state)
@@ -581,17 +588,35 @@ type Bound {
   Excl(Edge)
 }
 
+/// Returns this node's incident edges, sorted by edge order and each
+/// paired with its hash, from `state.bs_candidates` if a cache from an
+/// earlier round in this same search is still valid, or freshly built (and
+/// cached for the next round) otherwise.
+fn ensure_bs_candidates(
+  state: State,
+) -> #(State, List(#(EdgeId, EdgeInfo, Int))) {
+  case state.bs_candidates {
+    Some(cached) -> #(state, cached)
+    None -> {
+      let sorted =
+        dict.to_list(state.edges)
+        |> list.map(fn(pair) { #(pair.0, pair.1, edge_hash(pair.0)) })
+        |> list.sort(fn(a, b) { graph.compare_edge(a.1.edge, b.1.edge) })
+      #(State(..state, bs_candidates: Some(sorted)), sorted)
+    }
+  }
+}
+
 /// A node's own contribution to one round: the XOR of a hash of `id(e)`
 /// over every incident edge inside `in_range`, plus the (min, max) edge
 /// and a sampled subset of the incident *non-tree* edges
-fn bs_scan(state: State, in_range: fn(Edge) -> Bool) -> message.BsScan {
-  let kept =
-    dict.to_list(state.edges)
-    |> list.filter(fn(pair) { in_range(pair.1.edge) })
-
+fn bs_scan_result(
+  kept: List(#(EdgeId, EdgeInfo, Int)),
+  sample_k: Int,
+) -> message.BsScan {
   let xor =
-    list.fold(kept, 0, fn(acc, pair) {
-      int.bitwise_exclusive_or(acc, edge_hash(pair.0))
+    list.fold(kept, 0, fn(acc, triple) {
+      int.bitwise_exclusive_or(acc, triple.2)
     })
 
   // `via_addition` edges are excluded the same way `min_undecided_edge`
@@ -599,35 +624,51 @@ fn bs_scan(state: State, in_range: fn(Edge) -> Bool) -> message.BsScan {
   // the addition protocol, and must not be claimed as an ordinary MOE
   // candidate by a concurrent, unrelated repair's scan.
   let candidates =
-    list.filter(kept, fn(pair) {
-      pair.1.status != Selected && !pair.1.via_addition
+    list.filter(kept, fn(triple) {
+      triple.1.status != Selected && !triple.1.via_addition
     })
 
   let bounds =
-    list.fold(candidates, None, fn(acc, pair) {
-      merge_bounds(acc, Some(#(pair.1.edge, pair.1.edge)))
+    list.fold(candidates, None, fn(acc, triple) {
+      merge_bounds(acc, Some(#(triple.1.edge, triple.1.edge)))
     })
 
   let sample =
-    list.map(candidates, fn(pair) { #(pair.0, pair.1.edge) })
-    |> list.sort(fn(a, b) { int.compare(edge_hash(a.0), edge_hash(b.0)) })
-    |> list.take(sample_k(state))
+    candidates
+    |> list.sort(fn(a, b) { int.compare(a.2, b.2) })
+    |> list.take(sample_k)
+    |> list.map(fn(triple) { #(triple.0, triple.1.edge) })
 
   message.BsScan(xor:, bounds:, sample:)
 }
 
-fn bs_scan_range(state: State, lo: Bound, hi: Edge) -> message.BsScan {
-  bs_scan(state, fn(key) {
-    let above_lo = case lo {
+/// The initial, unfiltered round.
+fn bs_scan_all_sorted(
+  sorted_edges: List(#(EdgeId, EdgeInfo, Int)),
+  sample_k: Int,
+) -> message.BsScan {
+  bs_scan_result(sorted_edges, sample_k)
+}
+
+/// A split round: slices `sorted_edges` (ascending by edge order) down to
+/// `[lo, hi]`
+fn bs_scan_range_sorted(
+  sorted_edges: List(#(EdgeId, EdgeInfo, Int)),
+  sample_k: Int,
+  lo: Bound,
+  hi: Edge,
+) -> message.BsScan {
+  let above_lo = fn(key: Edge) -> Bool {
+    case lo {
       Incl(lo) -> !graph.edge_less(key, lo)
       Excl(lo) -> graph.edge_less(lo, key)
     }
-    above_lo && !graph.edge_less(hi, key)
-  })
-}
-
-fn bs_scan_all(state: State) -> message.BsScan {
-  bs_scan(state, fn(_) { True })
+  }
+  let kept =
+    sorted_edges
+    |> list.drop_while(fn(triple) { !above_lo(triple.1.edge) })
+    |> list.take_while(fn(triple) { !graph.edge_less(hi, triple.1.edge) })
+  bs_scan_result(kept, sample_k)
 }
 
 /// Merge the information of a BsScan
@@ -665,8 +706,10 @@ fn merge_samples(
 ) -> List(#(EdgeId, Edge)) {
   list.append(a, b)
   |> list.unique
-  |> list.sort(fn(p, q) { int.compare(edge_hash(p.0), edge_hash(q.0)) })
+  |> list.map(fn(p) { #(p, edge_hash(p.0)) })
+  |> list.sort(fn(x, y) { int.compare(x.1, y.1) })
   |> list.take(sample_k)
+  |> list.map(fn(x) { x.0 })
 }
 
 /// Compute the hash of an Edge
