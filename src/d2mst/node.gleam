@@ -150,15 +150,7 @@ pub type State {
   )
 }
 
-/// Excludes `via_addition` edges: those are driven exclusively by the
-/// addition protocol (`on_edge_test`/`on_addition`/`retry_abandoned_additions`),
-/// never by the ordinary MOE search. Without this exclusion, an unrelated
-/// concurrent repair's Phase 3 search can probe a `via_addition` edge still
-/// mid-flight in the addition protocol, see it as transiently "outgoing"
-/// (the two endpoints haven't converged on the same fragment identity yet),
-/// and claim it via the plain GHS merge path (`on_connect`) -- which just
-/// marks it Selected, bypassing the cycle max-weight prune that the
-/// addition protocol's `on_replace`/`execute_decision` is responsible for.
+/// Excludes `via_addition` edges: those are driven exclusively by the addition protocol.
 pub fn min_undecided_edge(state: State) -> Option(EdgeId) {
   min_edge(state, fn(info) { info.status == Undecided && !info.via_addition })
 }

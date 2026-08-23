@@ -116,38 +116,22 @@ fn on_edge_test(
         False ->
           case state.fragment == reported {
             True -> {
-              // SAME FRAGMENT: the new edge forms a cycle. The max weight
-              // edge on the cycle must be removed. Always go through
-              // `on_addition` itself (with `eid` standing in for both the
-              // event id and a self-loop "from" edge, matching its own
-              // weight/max_edge as the zero-hop baseline) rather than only
-              // forwarding to the parent: this is what lets us recognise
-              // ourselves as the LCA later, which matters whenever we turn
-              // out to be an ancestor of the other endpoint instead of a
-              // sibling descendant of some node further up.
+              // SAME FRAGMENT: the new edge forms a cycle. The max weight edge on the
+              // cycle must be removed.
               on_addition(state, eid, eid, info.edge.weight, state.id, 0, eid)
             }
             False -> {
               // DIFFERENT FRAGMENTS
-              // `ns == Sleeping` also covers a brand new node that was never
-              // woken by GHS: it starts in that state by default and has
-              // nothing to wait for, so it must be treated the same as a
-              // stable, quiescent fragment.
               case state.ns == Sleeping || state.halted {
                 True -> {
-                  // Case 1: no operation in progress, the network is
-                  // partitioned.
+                  // Case 1: no operation in progress, the network is partitioned.
                   case state.parent_edge {
-                    // If we are the root, we can merge the two fragments
-                    // directly if no addition/merge is currently active --
-                    // or preempt whatever is active if `eid` canonically
-                    // outranks it, or else queue for a turn later (see
-                    // `preempt_or_keep`).
+                    // The root can authorize the merge directly, possibly queueing it.
                     None ->
                       preempt_or_keep(state, eid, fn(s) {
                         approve_merge(s, eid)
                       })
-                    // Otherwise, we ask the root to authorize the merge.
+                    // Otherwise, request authorization from the root.
                     Some(parent_edge) -> {
                       // Send a request to the root to merge using this new
                       // link.
@@ -224,8 +208,7 @@ pub fn on_addition(
       max_edge: updated_max_edge,
     )
 
-  // Check if we already received an Addition for this event (LCA check). The stored
-  // fragment tag must still match ours.
+  // Check if we already received an Addition for this event.
   case dict.get(state.pending_additions, event_id) {
     Ok(#(first_msg, first_msg_from_edge, stored_fragment))
       if stored_fragment == state.fragment
@@ -233,9 +216,8 @@ pub fn on_addition(
       let assert message.Addition(..) = first_msg
       // We are the LCA. Now we update the topology. `winner` is the branch that reported
       // the larger running max (the one that holds the cycle's heaviest edge); `other_*`
-      // is the losing branch's own
-      // origin/routing edge, needed below to attach *its* side of the new
-      // edge too.
+      // is the losing branch's own origin/routing edge, needed below to attach *its* side
+      // of the new edge too. TODO: other_ is needed for what?
       let winner_is_first =
         graph.edge_less(
           graph.Edge(updated_max_edge.low, updated_max_edge.high, updated_max),
@@ -382,6 +364,148 @@ fn root_try_start(state: State) -> #(State, List(Effect)) {
 // --------------------------------------------------------- //
 //                      Update Topology                      //
 // --------------------------------------------------------- //
+// A Replace message is sent down the cycle to remove the heaviest edge.
+
+fn on_replace(
+  state: State,
+  from_edge: EdgeId,
+  event_id: EdgeId,
+  target_origin: NodeId,
+  max_weight: Int,
+  max_edge: EdgeId,
+  reversing: Bool,
+  should_prune: Bool,
+) -> #(State, List(Effect)) {
+  // Are we reversing? If we just crossed the max_edge, or were already reversing. Only
+  // meaningful when should_prune: a no-op wave (i.e. when the new edge has the maximum
+  // weight) never reverses anything.
+  let now_reversing = should_prune && { reversing || from_edge == max_edge }
+
+  // Find the next hop towards the origin. Always computed to clear the
+  // `pending_additions` entry even if should_prune is false.
+  let next_hop = case state.id == target_origin {
+    True -> option.None
+    False -> {
+      case dict.get(state.pending_additions, event_id) {
+        Ok(#(_msg, child_edge, _fragment)) -> option.Some(child_edge)
+        Error(_) ->
+          panic as "Unreachable: Replace wave arrived but pending_additions was wiped!"
+      }
+    }
+  }
+
+  // Reverse the parent pointer if we are on the disconnected side.
+  let state = case now_reversing {
+    True -> {
+      // The new parent is the neighbor we are forwarding the message to.
+      let new_parent = case state.id == target_origin {
+        // If we are at the origin, the new parent is the newly added edge itself.
+        True -> event_id
+        False -> option.unwrap(next_hop, event_id)
+      }
+      State(..state, parent_edge: option.Some(new_parent))
+    }
+    False -> state
+  }
+
+  // Forward the message down the cycle.
+  let effects = case next_hop {
+    Some(child_edge) -> {
+      let msg =
+        message.Replace(
+          event_id:,
+          target_origin:,
+          max_weight:,
+          max_edge:,
+          reversing: now_reversing,
+          should_prune:,
+        )
+      let envelope = message.AddMsg(msg, fragment: state.fragment)
+      [node.Send(child_edge, envelope)]
+    }
+    None -> []
+  }
+
+  // If the max_edge is connected to us, drop it.
+  let state = case should_prune, dict.get(state.edges, max_edge) {
+    True, Ok(info) -> {
+      let updated_info =
+        EdgeInfo(..info, status: Undecided, via_addition: False)
+      State(..state, edges: dict.insert(state.edges, max_edge, updated_info))
+    }
+    _, _ -> state
+  }
+
+  // Clear the pending_additions entry for this event_id.
+  let state =
+    State(
+      ..state,
+      pending_additions: dict.delete(state.pending_additions, event_id),
+    )
+
+  // If we are the target_origin, promote the new edge to the tree and report completion
+  // to the root.
+  let #(state, done_effects) = case state.id == target_origin {
+    True -> {
+      let state = case dict.get(state.edges, event_id) {
+        Ok(info) -> {
+          let updated_info = case should_prune {
+            True -> {
+              // Confirm the new edge as a mst edge.
+              EdgeInfo(
+                ..info,
+                status: Selected,
+                confirmed: True,
+                via_addition: False,
+              )
+            }
+            // No-op: only clear via_addition.
+            False -> EdgeInfo(..info, via_addition: False)
+          }
+          State(
+            ..state,
+            edges: dict.insert(state.edges, event_id, updated_info),
+          )
+        }
+        Error(_) -> state
+      }
+      forward_or_finish(state, event_id)
+    }
+    False -> #(state, [])
+  }
+
+  #(state, list.append(effects, done_effects))
+}
+
+/// Report this event done to the root and handle it.
+fn forward_or_finish(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
+  case state.parent_edge {
+    Some(parent_edge) -> {
+      let msg = message.AddDone(event_id:)
+      #(state, [
+        node.Send(parent_edge, message.AddMsg(msg, fragment: state.fragment)),
+      ])
+    }
+    None -> handle_root_add_done(state, event_id)
+  }
+}
+
+/// Root only, on receiving the aggregate `AddDone` for the event it currently has active:
+/// free up the slot and try the next one.
+fn handle_root_add_done(
+  state: State,
+  event_id: EdgeId,
+) -> #(State, List(Effect)) {
+  let state = case state.addition_active == Some(event_id) {
+    True -> State(..state, addition_active: None)
+    False -> state
+  }
+  root_try_start(state)
+}
+
+// --------------------------------------------------------- //
+//                    Different Fragments                    //
+// --------------------------------------------------------- //
 
 fn on_request_merge(
   state: State,
@@ -395,17 +519,15 @@ fn on_request_merge(
         True ->
           preempt_or_keep(state, add_edge, fn(s) { approve_merge(s, add_edge) })
         False -> {
-          // A failure repair is in progress here, not just another
-          // addition: drop request. When the current operation settles,
-          // retry_abandoned_additions will re-probe all undecided
-          // via_addition edges.
+          // A failure repair is in progress here, not just another addition: drop
+          // request. When the current operation settles, retry_abandoned_additions will
+          // re-probe all undecided via_addition edges.
           #(state, [])
         }
       }
     }
     False -> {
       // Not the root. Forward the request upward via the parent link.
-      // Adjust `state.parent` to match your struct's tree-routing field.
       let assert option.Some(parent_edge) = state.parent_edge
       let msg = message.AddRequestMergePartition(add_edge)
       let envelope = message.AddMsg(msg, fragment: state.fragment)
@@ -474,10 +596,10 @@ fn approve_merge(state: State, add_edge: EdgeId) -> #(State, List(Effect)) {
   }
 }
 
-/// Root-only: run `execute` (which commits this root to `candidate`, i.e.
-/// sets `addition_active`) if the root is currently free, or if `candidate`
-/// canonically outranks whatever is already active; otherwise queue
-/// `candidate` in `pending_merges` for its turn once the active one settles.
+/// Root-only: either:
+/// - run `execute` if the root is currently free, or if `candidate` outranks whatever is
+///   already active; otherwise,
+/// - queue `candidate` in `pending_merges` for its turn once the active one settles.
 ///
 /// Two different new edges concurrently reconnecting the very same pair of
 /// fragments get decided by each fragment's *own* root independently --
@@ -586,149 +708,6 @@ fn merge(
   }
 }
 
-fn on_replace(
-  state: State,
-  from_edge: EdgeId,
-  event_id: EdgeId,
-  target_origin: NodeId,
-  max_weight: Int,
-  max_edge: EdgeId,
-  reversing: Bool,
-  should_prune: Bool,
-) -> #(State, List(Effect)) {
-  // Are we reversing? If we just crossed the max_edge, or were already
-  // reversing. Only meaningful when should_prune: a no-op wave never
-  // reverses anything.
-  let now_reversing = should_prune && { reversing || from_edge == max_edge }
-
-  // Find the next hop towards the origin. Always computed, and the
-  // `pending_additions` entry it comes from is always cleared below: this
-  // is the routing/cleanup half of the wave, which runs identically
-  // whether or not there is anything to prune.
-  let next_hop = case state.id == target_origin {
-    True -> option.None
-    False -> {
-      // No staleness check needed here (unlike `on_addition`'s): this
-      // Replace only exists because a Privilege already authorized it, and
-      // getting a Privilege at all requires this event to currently be
-      // `state.addition_active`/routed via a live `turn_routing` entry --
-      // both of which `clear_addition_state` wipes the instant this node's
-      // own fragment changes. So by the time we're here, either the entry
-      // is live, or it and the Replace that would have used it are already
-      // gone together.
-      case dict.get(state.pending_additions, event_id) {
-        Ok(#(_msg, child_edge, _fragment)) -> option.Some(child_edge)
-        Error(_) -> option.None
-      }
-    }
-  }
-
-  // Reverse the parent pointer if we are on the disconnected side.
-  let state = case now_reversing {
-    True -> {
-      // The new parent is the neighbor we are forwarding the message to.
-      // If we are at the origin, the new parent is the newly added edge itself.
-      let new_parent = case state.id == target_origin {
-        True -> event_id
-        False -> option.unwrap(next_hop, event_id)
-      }
-      State(..state, parent_edge: option.Some(new_parent))
-    }
-    False -> state
-  }
-
-  // Forward the message down the cycle.
-  let effects = case next_hop {
-    Some(child_edge) -> {
-      let msg =
-        message.Replace(
-          event_id:,
-          target_origin:,
-          max_weight:,
-          max_edge:,
-          reversing: now_reversing,
-          should_prune:,
-        )
-      let envelope = message.AddMsg(msg, fragment: state.fragment)
-      [node.Send(child_edge, envelope)]
-    }
-    None -> []
-  }
-
-  // If the max_edge is connected to us, drop it -- only if there is
-  // actually something to prune.
-  let state = case should_prune, dict.get(state.edges, max_edge) {
-    True, Ok(info) -> {
-      let updated_info =
-        EdgeInfo(..info, status: Undecided, via_addition: False)
-      State(..state, edges: dict.insert(state.edges, max_edge, updated_info))
-    }
-    _, _ -> state
-  }
-
-  // This event is settled here: forget the bookkeeping we kept to route
-  // the Replace wave, so a later addition of the same edge (same event_id)
-  // does not mistake this leftover entry for an in-progress round. Runs
-  // unconditionally -- this is exactly the cleanup a no-op decision needs
-  // too (see the `should_prune: False` doc on `message.Replace`).
-  let state =
-    State(
-      ..state,
-      pending_additions: dict.delete(state.pending_additions, event_id),
-    )
-
-  // If we are the target_origin, promote the new edge to the tree (only
-  // when there was something to prune -- a no-op leaves the new edge
-  // unselected, that is the point of it being a no-op) and report this
-  // branch done: `execute_decision` is waiting to hear from both branches
-  // (the winning one that reaches us here, and the losing one that reaches
-  // its own `other_origin` the same way, since it also gets routed through
-  // here with `target_origin` set to it) before it considers the event
-  // finished and lets the root move on.
-  let #(state, done_effects) = case state.id == target_origin {
-    True -> {
-      let state = case dict.get(state.edges, event_id) {
-        Ok(info) -> {
-          // Either way, the addition round concludes for this edge here:
-          // clear `via_addition` so a no-op result (should_prune: False)
-          // doesn't leave it permanently hidden from `node.min_undecided_edge`'s
-          // Phase 3 search, as if a round were still in flight for it.
-          let updated_info = case should_prune {
-            True -> {
-              // Cycle-path resolution: the LCA's decision plus the Replace
-              // wave routing it here already constitute mutual agreement
-              // between both origins -- there is no separate `Connect`
-              // handshake to wait for, so mark this confirmed immediately
-              // (see `EdgeInfo.confirmed`). Without this, this edge would
-              // sit at `Selected && !confirmed` forever, and a stray
-              // `AddTest` landing on it later would make `on_edge_test`'s
-              // peer-nudge branch fire with no way to ever reach
-              // `confirmed` on this path -- an infinite resend ping-pong
-              // between the two endpoints.
-              EdgeInfo(
-                ..info,
-                status: Selected,
-                confirmed: True,
-                via_addition: False,
-              )
-            }
-            False -> EdgeInfo(..info, via_addition: False)
-          }
-          State(
-            ..state,
-            edges: dict.insert(state.edges, event_id, updated_info),
-          )
-        }
-        Error(_) -> state
-      }
-      forward_or_finish(state, event_id)
-    }
-    False -> #(state, [])
-  }
-
-  #(state, list.append(effects, done_effects))
-}
-
 fn on_privilege(
   state: State,
   _from_edge: EdgeId,
@@ -793,19 +772,6 @@ fn on_add_done(
         }
       }
   }
-}
-
-/// Root only, on receiving the aggregate `AddDone` for the event it
-/// currently has active: free up the slot and try the next one.
-fn handle_root_add_done(
-  state: State,
-  event_id: EdgeId,
-) -> #(State, List(Effect)) {
-  let state = case state.addition_active == Some(event_id) {
-    True -> State(..state, addition_active: None)
-    False -> state
-  }
-  root_try_start(state)
 }
 
 /// Grant a turn: if this node is itself the LCA (has a stashed decision),
@@ -968,20 +934,6 @@ pub fn execute_decision(
       )
 
     #(state, list.append(winner_effects, loser_effects))
-  }
-}
-
-/// Report this event done: up to our parent, or -- if we are the root --
-/// straight to `handle_root_add_done`.
-fn forward_or_finish(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
-  case state.parent_edge {
-    Some(parent_edge) -> {
-      let msg = message.AddDone(event_id:)
-      #(state, [
-        node.Send(parent_edge, message.AddMsg(msg, fragment: state.fragment)),
-      ])
-    }
-    None -> handle_root_add_done(state, event_id)
   }
 }
 

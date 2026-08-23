@@ -579,7 +579,14 @@ there can be two different cases:
   \item if $u$ (or $v$) is in sleep state, it means that the network was partitioned and
         the link $(u,v)$ connects the two partitioned fragments. In this case, node $u$ 
         (or $v$) sends a request to the root of its fragment to add the link $(u,v)$ to 
-        the MST.
+        the MST. The root acts as a central coordinator to serialize operations and
+        prevent deadlocks. If multiple parallel links are added concurrently between the
+        same two fragments, both respective roots will receive multiple merge requests.
+        Because a cross-fragment merge requires a mutual handshake to terminate, the roots
+        must agree on a single bridge to avoid deadlocking. To achieve this without direct
+        inter-root communication, both roots deterministically break ties using the edge
+        identifier. If a root is actively processing a merge request and receives a new
+        candidate with a lower identifier, it preempts the active operation.
   \item Otherwise, a failure response protocol is already in progress. In this case the
         failure needs to be resolved first: node $u$ and $v$ will wait for new identities
         of their fragments, and check again if the they are in the same fragment. If they
