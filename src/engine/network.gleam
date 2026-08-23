@@ -85,7 +85,14 @@ pub fn crash_node(net: Network, n: NodeId) -> Network {
     Ok(h) -> process.kill(h.pid)
     Error(_) -> Nil
   }
+  process.send(net.logger, logger.Forget(n))
   let gone = graph.incident(net.graph, n)
+  // Every surviving neighbor is about to react to a LinkDown, so its cached
+  // `latest` entry is invalidated.
+  process.send(
+    net.logger,
+    logger.Invalidate(list.map(gone, fn(e) { graph.other_node(e, n) })),
+  )
   Network(
     ..net,
     graph: graph.remove_node(net.graph, n),
@@ -110,6 +117,9 @@ pub fn add_link(net: Network, e: Edge) -> Network {
       let l = link.start(e, endpoint(hu), endpoint(hv))
       process.send(hu.control, node_actor.AttachEdge(e, l))
       process.send(hv.control, node_actor.AttachEdge(e, l))
+      // Both endpoints are about to react to a LinkUp; drop their cached
+      // `latest` entries
+      process.send(net.logger, logger.Invalidate([e.u, e.v]))
       Network(
         ..net,
         graph: graph.add_edge(net.graph, e),
@@ -124,7 +134,12 @@ pub fn add_link(net: Network, e: Edge) -> Network {
 pub fn fail_link(net: Network, u: NodeId, v: NodeId) -> Network {
   let eid = graph.edge_id(u, v)
   case dict.get(net.links, eid) {
-    Ok(l) -> process.kill(l.pid)
+    Ok(l) -> {
+      process.kill(l.pid)
+      // Both endpoints are about to react to a LinkDown; drop their cached
+      // `latest` entries.
+      process.send(net.logger, logger.Invalidate([u, v]))
+    }
     Error(_) -> Nil
   }
   Network(
