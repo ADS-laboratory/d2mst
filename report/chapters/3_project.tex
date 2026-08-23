@@ -1,6 +1,6 @@
 \newcommand{\msg}[1]{\textsc{#1}\xspace}
 
-\chapter{Project}
+\chapter{Project}\label{ch:project}
 
 This chapter is devoted to the description of the general architectures, and specific algorithms.
 
@@ -16,6 +16,12 @@ We assume that initially the network has already converged to a minimum directed
 a set of minimum spanning trees if the network is not connected). The system reacts to
 topological changes by executing a failure response protocol when a tree link fails, and a
 addition response protocol when a new link is added to the network. Here is an overview of how the protocols work:
+
+This assumption defines the starting point of the dynamic protocols, rather than requiring
+the user to provide an MST externally. During startup, the implementation first constructs
+the initial spanning forest with the distributed GHS algorithm. Only after this
+construction has converged, the failure and addition response protocols process topology
+changes.
 
 \begin{itemize}
   \item \textbf{Failure response protocol:} when a tree link fails, the spanning tree is split into two fragments. The protocol identifies the minimum-weight edge that connects the two fragments and adds it to the MST, restoring connectivity. We provide two procedures to do so:

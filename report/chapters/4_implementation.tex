@@ -1,6 +1,31 @@
 \chapter{Implementation}
 
-Details about the implementation: every choice about platforms, languages, software/hardware, middlewares, which has not been decided in the requirements.
+% Details about the implementation: every choice about platforms, languages, software/hardware, middlewares, which has not been decided in the requirements.
 
+% Important choices about implementation should be described here; e.g., peculiar data structures.
 
-Important choices about implementation should be described here; e.g., peculiar data structures.
+This chapter describes the implementation of the dynamic distributed minimum spanning tree
+(D2MST) protocol. The implementation follows the logical architecture introduced in
+Chapter \ref{ch:project}: the protocol is distributed among the network nodes, while a
+small layer provides processes, communication, topology events, and observation.
+
+\section{Technology and execution model}
+
+The project is written in Gleam and compiled for the Erlang/OTP runtime. Gleam provides a
+statically typed functional language, while OTP supplies the lightweight processes,
+message passing, process monitors, and other primitives used by the implementation. The
+project can be built and tested with the standard commands \texttt{gleam run} and
+\texttt{gleam test}.
+
+The implementation has two execution modes. The normal mode uses OTP actors and models one
+process for every node and one process for every link. The second mode is a deterministic,
+process-free simulator used by most protocol tests. Both modes execute the same pure node
+state machine, so the simulator is useful for reproducible protocol tests.
+
+At startup, every node is initialized as a singleton fragment and is woken by the network.
+The GHS implementation then constructs the initial minimum spanning forest through local
+message exchanges. The dynamic failure and addition handlers are therefore used only after
+this initial GHS phase has converged; they maintain and repair the tree produced by GHS rather
+than constructing the first MST from an already supplied tree.
+
+\section{Software architecture}
