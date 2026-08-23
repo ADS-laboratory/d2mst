@@ -52,15 +52,26 @@ pub type Msg {
   StateChanged(summary: Summary)
   GetLatest(reply: Subject(Dict(NodeId, Summary)))
   GetCounts(reply: Subject(Dict(NodeId, Int)))
+  /// Total protocol messages sent since the logger started.
+  GetTotalSent(reply: Subject(Int))
   Reset
+  /// A node left the network: drop its entries.
+  Forget(id: NodeId)
+  /// A topology event (link failure, link addition) directly touched these
+  /// nodes: drop their cached `latest` entries.
+  Invalidate(ids: List(NodeId))
 }
 
 type State {
-  State(latest: Dict(NodeId, Summary), counts: Dict(NodeId, Int))
+  State(
+    latest: Dict(NodeId, Summary),
+    counts: Dict(NodeId, Int),
+    total_sent: Int,
+  )
 }
 
 fn empty() -> State {
-  State(latest: dict.new(), counts: dict.new())
+  State(latest: dict.new(), counts: dict.new(), total_sent: 0)
 }
 
 pub fn start() -> Subject(Msg) {
@@ -84,7 +95,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             None -> 1
           }
         })
-      actor.continue(State(..state, counts:))
+      actor.continue(State(..state, counts:, total_sent: state.total_sent + 1))
     }
     StateChanged(summary) -> {
       let latest = dict.insert(state.latest, summary.id, summary)
@@ -98,7 +109,26 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       process.send(reply, state.counts)
       actor.continue(state)
     }
+    GetTotalSent(reply) -> {
+      process.send(reply, state.total_sent)
+      actor.continue(state)
+    }
     Reset -> actor.continue(empty())
+    Forget(id) ->
+      actor.continue(
+        State(
+          ..state,
+          latest: dict.delete(state.latest, id),
+          counts: dict.delete(state.counts, id),
+        ),
+      )
+    Invalidate(ids) ->
+      actor.continue(
+        State(
+          ..state,
+          latest: list.fold(ids, state.latest, fn(d, id) { dict.delete(d, id) }),
+        ),
+      )
   }
 }
 
@@ -125,6 +155,11 @@ pub fn reconstruct(
 /// Fetch the running per-node message counts.
 pub fn counts(lg: Subject(Msg), timeout: Int) -> Dict(NodeId, Int) {
   process.call(lg, timeout, GetCounts)
+}
+
+/// Total protocol messages sent since the logger started
+pub fn total_sent(lg: Subject(Msg), timeout: Int) -> Int {
+  process.call(lg, timeout, GetTotalSent)
 }
 
 /// Total number of protocol messages recorded.

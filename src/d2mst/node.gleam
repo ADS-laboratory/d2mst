@@ -115,6 +115,9 @@ pub type State {
     bs_scan: message.BsScan,
     bs_left: message.BsScan,
     bs_right: message.BsScan,
+    /// `BinarySearch` only: this node's incident edges, sorted by edge
+    /// order and each paired with its hash
+    bs_candidates: Option(List(#(EdgeId, EdgeInfo, Int))),
     /// Pending additions, waiting for the other branch to arrive at the LCA.
     /// The third element is the fragment id this node had when the entry
     /// was stored: a re-identification (Phase 1/2, or `d2m.on_connect`'s
@@ -217,6 +220,7 @@ pub fn init_with_strategy(
     bs_scan: message.bs_scan_zero,
     bs_left: message.bs_scan_zero,
     bs_right: message.bs_scan_zero,
+    bs_candidates: None,
     pending_additions: dict.new(),
     turn_routing: dict.new(),
     ready_replace: dict.new(),
@@ -248,6 +252,8 @@ pub fn add_edge(state: State, edge: Edge) -> State {
         confirmed: False,
       ),
     ),
+    // Invalidate the BinarySearch candidate cache: see its field doc.
+    bs_candidates: None,
   )
 }
 

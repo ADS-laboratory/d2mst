@@ -1,9 +1,10 @@
-//// Demo entrypoint: build a random graph, run the distributed GHS
-//// construction on the real actor engine, then fire random topology events
-//// in overlapping bursts forever, checking convergence against the Kruskal
-//// oracle after every burst.
+//// Build a random graph from a user-chosen size, then repeatedly prompt for a
+//// round of node/edge failures and additions, fire them as one overlapping 
+//// burst, wait for the network to re-converge, and report the round's stats. 
+//// Repeats until blocked.
 
 import d2mst/graph.{type Graph, Edge}
+import engine/console
 import engine/generator
 import engine/logger
 import engine/network.{type Network}
@@ -15,96 +16,111 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/set
 
-/// Nodes in the graph the simulation starts from.
-const initial_node_count = 500
+/// Convergence poll budget per round: up to `await_attempts` retries,
+/// `await_interval_ms` apart, before a round is declared not converged.
+const await_attempts = 2000
 
-/// Chance (%) of an extra edge between any two nodes not already joined by
-/// the initial random spanning tree.
-const initial_edge_pct = 33
+const await_interval_ms = 25
 
-/// Seed the initial graph's shape is generated from.
-const initial_graph_seed = 2026
-
-/// Seed the endless stream of random topology events is generated from.
-const event_seed = 909
-
-/// Random topology events fired per burst; within a burst nothing settles,
-/// so up to `burst_size` node/edge events overlap.
-const burst_size = 5
-
-/// Convergence poll budget per check: up to `await_attempts` retries,
-/// `await_interval_ms` apart, before a burst is declared not converged.
-const await_attempts = 500
-
-const await_interval_ms = 50
-
+/// Extra edges wired per node addition
 const join_extra_edges = 1
 
 pub fn main() {
-  let g =
-    generator.connected(
-      initial_graph_seed,
-      initial_node_count,
-      initial_edge_pct,
-    )
+  io.println("== d2mst interactive ==")
+  let node_count = console.ask_int("number of nodes: ", 1)
+  let edge_pct = console.ask_int_range("edge_pct (0-100): ", 0, 100)
+  let seed = console.now_ms()
+
+  let g = generator.connected(seed, node_count, edge_pct)
   let lg = logger.start()
   let net = network.start(g, lg)
-  network.wake_all(net)
 
-  io.println("-- initial convergence --")
-  case await_and_check(lg, net.graph, await_attempts, await_interval_ms) {
-    Error(reason) -> io.println("FAILED: " <> reason)
-    Ok(_) -> {
-      io.println("ok")
-      run_bursts(net, lg, event_seed, initial_node_count + 1, 1)
-    }
-  }
+  io.println("\n-- initial construction --")
+  let before = logger.total_sent(lg, 10_000)
+  let t0 = console.now_ms()
+  network.wake_all(net)
+  let net = converge_and_report(net, lg, before, t0)
+  loop(net, lg, seed + 1, node_count)
 }
 
-/// Random topology events forever, in bursts of `burst_size`: within a
-/// burst nothing settles, so up to `burst_size` node/edge events overlap.
-fn run_bursts(
+/// Prompt for one round's operation counts, apply them, report, repeat.
+fn loop(net: Network, lg: Subject(logger.Msg), seed: Int, next_id: Int) -> Nil {
+  io.println("\n== next round ==")
+  let node_fail = console.ask_int("node failures: ", 0)
+  let node_add = console.ask_int("node additions: ", 0)
+  let edge_fail = console.ask_int("edge failures: ", 0)
+  let edge_add = console.ask_int("edge additions: ", 0)
+  console.wait_enter("press Enter to fire this round...")
+
+  let before = logger.total_sent(lg, 10_000)
+  let t0 = console.now_ms()
+  let #(net, seed, next_id) =
+    apply_round(net, seed, next_id, node_fail, node_add, edge_fail, edge_add)
+  let net = converge_and_report(net, lg, before, t0)
+  loop(net, lg, seed, next_id)
+}
+
+/// Wait for the network to halt, run the oracle check, and print the
+/// requested stats.
+fn converge_and_report(
   net: Network,
   lg: Subject(logger.Msg),
-  seed: Int,
-  next_id: Int,
-  i: Int,
-) -> Nil {
-  let #(net, seed, next_id) = random_event(net, seed, next_id)
-  case i % burst_size == 0 {
-    False -> run_bursts(net, lg, seed, next_id, i + 1)
-    True -> {
-      io.println(
-        "-- burst ending at event "
-        <> int.to_string(i)
-        <> " ("
-        <> int.to_string(list.length(net.graph.nodes))
-        <> " nodes) --",
-      )
-      case await_and_check(lg, net.graph, await_attempts, await_interval_ms) {
-        Error(reason) -> io.println("FAILED: " <> reason)
+  before: Int,
+  t0: Int,
+) -> Network {
+  case
+    console.try_run(fn() {
+      logger.await_halt(lg, net.graph.nodes, await_attempts, await_interval_ms)
+    })
+  {
+    Error(Nil) | Ok(Error(_)) -> {
+      io.println("FAILED: did not converge in time")
+      net
+    }
+    Ok(Ok(summaries)) -> {
+      let t1 = console.now_ms()
+      let check_result = check(net.graph, summaries)
+      let t2 = console.now_ms()
+      let after = case console.try_run(fn() { logger.total_sent(lg, 10_000) }) {
+        Ok(n) -> n
+        Error(Nil) -> {
+          io.println("  (message count unavailable: logger still busy)")
+          before
+        }
+      }
+      case check_result {
+        Error(reason) -> io.println("CHECK FAILED: " <> reason)
         Ok(_) -> io.println("ok")
       }
-      run_bursts(net, lg, seed, next_id, i + 1)
+      report(net.graph, t1 - t0, t2 - t1, after - before, after)
+      net
     }
   }
 }
 
-fn await_and_check(
-  lg: Subject(logger.Msg),
+fn report(
   g: Graph,
-  attempts: Int,
-  interval_ms: Int,
-) -> Result(Nil, String) {
-  case logger.await_halt(lg, g.nodes, attempts, interval_ms) {
-    Error(_) -> Error("did not converge in time")
-    Ok(summaries) -> check(g, summaries)
-  }
+  converge_ms: Int,
+  check_ms: Int,
+  round_messages: Int,
+  total_messages: Int,
+) -> Nil {
+  io.println("  nodes:               " <> int.to_string(list.length(g.nodes)))
+  io.println("  edges:               " <> int.to_string(list.length(g.edges)))
+  io.println("  time to converge:    " <> int.to_string(converge_ms) <> " ms")
+  io.println("  time for check:      " <> int.to_string(check_ms) <> " ms")
+  io.println(
+    "  messages this round: "
+    <> int.to_string(round_messages)
+    <> " (total so far: "
+    <> int.to_string(total_messages)
+    <> ")",
+  )
 }
 
-/// Same invariants as `sim/oracle.check`: every node halted, the union of
-/// reported tree edges equals the unique Kruskal MST, one root per
-/// connected component, and every parent pointer is a tree edge.
+/// Check that every node halted, the union of reported tree edges equals the 
+/// unique Kruskal MST, one root per connected component, and every parent 
+/// pointer is a tree edge.
 fn check(g: Graph, summaries: List(logger.Summary)) -> Result(Nil, String) {
   let all_halted = list.all(summaries, fn(s) { s.halted })
   let branch =
@@ -148,62 +164,108 @@ fn at(items: List(a), i: Int) -> Result(a, Nil) {
   items |> list.drop(i) |> list.first
 }
 
-/// Fire one random topology event: fail a link, add a link, join a new
-/// isolated node, or crash a node (kept rare enough to leave >4 nodes
-/// alive, so the run has something left to keep mutating).
-///
-/// Draws the branch out of 7, not 4: `generator.next`'s LCG has a
-/// power-of-2 modulus, so its low bits are degenerate. 7 is coprime to the
-/// modulus and mixes far better (see `failure_test.random_event`).
-fn random_event(net: Network, seed: Int, next_id: Int) -> #(Network, Int, Int) {
-  let #(pick, seed) = generator.rand_below(seed, 7)
-  case pick {
-    0 | 1 ->
-      case net.graph.edges {
-        [] -> #(net, seed, next_id)
-        edges -> {
-          let #(i, seed) = generator.rand_below(seed, list.length(edges))
-          let assert Ok(e) = at(edges, i)
-          #(network.fail_link(net, e.u, e.v), seed, next_id)
-        }
-      }
-    2 | 3 ->
-      case list.length(net.graph.nodes) > 4 {
-        False -> #(net, seed, next_id)
-        True -> {
-          let #(idx, seed) =
-            generator.rand_below(seed, list.length(net.graph.nodes))
-          let assert Ok(n) = at(net.graph.nodes, idx)
-          #(network.crash_node(net, n), seed, next_id)
-        }
-      }
-    4 | 5 -> {
-      let nodes = net.graph.nodes
+/// Apply one round's requested operation counts, in this order: node
+/// failures, node additions, edge failures, edge additions. Nothing
+/// settles in between, so the effects overlap the way a GHS repair must
+/// tolerate.
+fn apply_round(
+  net: Network,
+  seed: Int,
+  next_id: Int,
+  node_fail: Int,
+  node_add: Int,
+  edge_fail: Int,
+  edge_add: Int,
+) -> #(Network, Int, Int) {
+  let #(net, seed) = repeat(node_fail, net, seed, fail_random_node)
+  let #(net, seed, next_id) = add_nodes(net, seed, next_id, node_add)
+  let #(net, seed) = repeat(edge_fail, net, seed, fail_random_edge)
+  let #(net, seed) = repeat(edge_add, net, seed, add_random_edge)
+  #(net, seed, next_id)
+}
+
+fn repeat(
+  n: Int,
+  net: Network,
+  seed: Int,
+  f: fn(Network, Int) -> #(Network, Int),
+) -> #(Network, Int) {
+  case n <= 0 {
+    True -> #(net, seed)
+    False -> {
+      let #(net, seed) = f(net, seed)
+      repeat(n - 1, net, seed, f)
+    }
+  }
+}
+
+fn add_nodes(
+  net: Network,
+  seed: Int,
+  next_id: Int,
+  count: Int,
+) -> #(Network, Int, Int) {
+  case count <= 0 {
+    True -> #(net, seed, next_id)
+    False -> {
+      let #(net, seed) = join_node(net, seed, next_id)
+      add_nodes(net, seed, next_id + 1, count - 1)
+    }
+  }
+}
+
+fn fail_random_node(net: Network, seed: Int) -> #(Network, Int) {
+  case net.graph.nodes {
+    [] | [_] -> {
+      io.println("  (skip node failure: fewer than 2 nodes left)")
+      #(net, seed)
+    }
+    nodes -> {
+      let #(idx, seed) = generator.rand_below(seed, list.length(nodes))
+      let assert Ok(n) = at(nodes, idx)
+      #(network.crash_node(net, n), seed)
+    }
+  }
+}
+
+fn fail_random_edge(net: Network, seed: Int) -> #(Network, Int) {
+  case net.graph.edges {
+    [] -> {
+      io.println("  (skip edge failure: no edges left)")
+      #(net, seed)
+    }
+    edges -> {
+      let #(idx, seed) = generator.rand_below(seed, list.length(edges))
+      let assert Ok(e) = at(edges, idx)
+      #(network.fail_link(net, e.u, e.v), seed)
+    }
+  }
+}
+
+fn add_random_edge(net: Network, seed: Int) -> #(Network, Int) {
+  let nodes = net.graph.nodes
+  case list.length(nodes) < 2 {
+    True -> {
+      io.println("  (skip edge addition: fewer than 2 nodes)")
+      #(net, seed)
+    }
+    False -> {
       let #(u_idx, seed) = generator.rand_below(seed, list.length(nodes))
       let #(v_idx, seed) = generator.rand_below(seed, list.length(nodes))
       let assert Ok(u) = at(nodes, u_idx)
       let assert Ok(v) = at(nodes, v_idx)
       let #(w, seed) = generator.rand_below(seed, 100)
       case u == v {
-        True -> #(net, seed, next_id)
-        False -> #(network.add_link(net, Edge(u, v, w + 1)), seed, next_id)
+        True -> #(net, seed)
+        False -> #(network.add_link(net, Edge(u, v, w + 1)), seed)
       }
-    }
-    _ -> {
-      let #(net, seed) = join_node(net, seed, next_id)
-      #(net, seed, next_id + 1)
     }
   }
 }
 
-/// Add a node and wire it into the network: one guaranteed edge to a
-/// random existing node (so it is never left stranded), plus up to
-/// `join_extra_edges` more to other random existing nodes -- otherwise
-/// `add_node` events only ever grow the node count while never replacing
-/// the edges lost to `fail_link`/`crash_node`, and the graph thins out
-/// over a long run. Some of the extra picks may repeat (harmless:
-/// `network.add_link` no-ops on an edge that already exists), which keeps
-/// this a flat, node-count-independent amount of work per join.
+/// Add a node and wire it into the network: one guaranteed edge to a random 
+/// existing node, plus up to `join_extra_edges` more to other random existing
+/// nodes.
 fn join_node(net: Network, seed: Int, next_id: Int) -> #(Network, Int) {
   case net.graph.nodes {
     [] -> #(network.add_node(net, next_id), seed)
