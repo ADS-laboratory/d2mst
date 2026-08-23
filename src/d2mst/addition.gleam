@@ -67,7 +67,7 @@ pub fn handle_add_message(
 //            Endpoints' Fragments Discrimination            //
 // --------------------------------------------------------- //
 
-/// Register a newly added edge and trigger the addition response protocol (i.e. ask to 
+/// Register a newly added edge and trigger the addition response protocol (i.e. ask to
 /// the neighbor if it is in the same fragment or not and wait for a response).
 pub fn add_edge(state: State, edge: Edge) -> #(State, List(Effect)) {
   let peer = graph.other_node(edge, state.id)
@@ -596,6 +596,16 @@ fn on_replace(
   reversing: Bool,
   should_prune: Bool,
 ) -> #(State, List(Effect)) {
+  // Only prune/reverse here if the wave arrived via our current parent edge.
+  // `parent_edge` may have moved since this node's `pending_additions` routing
+  // entry was set up in which case this node is no longer on the path the
+  // upstream `should_prune` decision was made for.
+  let is_fresh = case state.parent_edge {
+    Some(p) -> p == from_edge
+    None -> True
+  }
+  let should_prune = should_prune && is_fresh
+
   // Are we reversing? If we just crossed the max_edge, or were already
   // reversing. Only meaningful when should_prune: a no-op wave never
   // reverses anything.
