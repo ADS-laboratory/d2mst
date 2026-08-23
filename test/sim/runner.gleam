@@ -16,6 +16,8 @@ pub type Sim {
     states: Dict(NodeId, node.State),
     /// Events not yet delivered: the in-flight messages of the system.
     queue: List(#(NodeId, node.Event)),
+    /// Running count of `Send` effects delivered so far
+    sent: Int,
   )
 }
 
@@ -35,7 +37,7 @@ pub fn new_with_strategy(g: Graph, moe_strategy: node.MoeStrategy) -> Sim {
         node.init_with_strategy(n, graph.incident(g, n), moe_strategy),
       )
     })
-  Sim(graph: g, states:, queue: [])
+  Sim(graph: g, states:, queue: [], sent: 0)
 }
 
 pub fn wake(sim: Sim, n: NodeId) -> Sim {
@@ -83,6 +85,11 @@ pub fn summaries(sim: Sim) -> List(logger.Summary) {
   |> list.map(fn(p) { logger.summarise(p.1) })
 }
 
+/// Protocol messages (`Send` effects) delivered so far.
+pub fn sent(sim: Sim) -> Int {
+  sim.sent
+}
+
 // --- topology events --------------------------------------------------------
 //
 // The process-free counterparts of `engine/network`'s events. Killing a
@@ -115,6 +122,7 @@ pub fn crash_node(sim: Sim, n: NodeId) -> Sim {
     |> list.map(fn(e) { #(graph.edge_id(e.u, e.v), graph.other_node(e, n)) })
   let sim =
     Sim(
+      ..sim,
       graph: graph.remove_node(sim.graph, n),
       states: dict.delete(sim.states, n),
       queue: list.filter(sim.queue, fn(entry) {
@@ -173,7 +181,12 @@ fn step(sim: Sim, target: NodeId, event: node.Event) -> Sim {
     Error(_) -> sim
     Ok(st) -> {
       let #(st, effects) = algorithm.handle(st, event)
-      let sim = Sim(..sim, states: dict.insert(sim.states, target, st))
+      let sim =
+        Sim(
+          ..sim,
+          states: dict.insert(sim.states, target, st),
+          sent: sim.sent + list.length(effects),
+        )
       enqueue(
         sim,
         list.map(effects, fn(effect) {
