@@ -24,7 +24,7 @@ pub fn handle_failure_message(
   message_fragment_id: FragmentId,
 ) -> #(State, List(Effect)) {
   case fail_is_intra_fragment(msg) && message_fragment_id != state.fragment {
-    // A superseded round gets silently discarded
+    // Ignore messages from an older fragment identity.
     True -> #(state, [])
     False ->
       case msg {
@@ -145,11 +145,8 @@ fn on_report_failure(
 /// Root or intermediate node initiates/propagates RE-IDEN down tree branches.
 fn start_reiden_phase(state: State) -> #(State, List(Effect)) {
   let children = branch_children(state)
-  // The fragment identity is about to change, so every addition message in
-  // flight under the old one will be silently discarded wherever it lands
-  // (see `message.add_is_intra_fragment`) -- any coordination state tied to
-  // it is dead. Clear it now (`clear_addition_state`) rather than leaving
-  // it stale.
+  // The fragment identity is about to change, so every addition message in flight under
+  // the old one will be silently discarded.
   let state = clear_addition_state(state)
   let state =
     State(

@@ -348,24 +348,9 @@ pub fn branch_edges_except(
   })
 }
 
-/// Clears every piece of addition-response bookkeeping tied to this node's
-/// *current* fragment identity. Must be called anywhere `state.fragment` is
-/// reassigned (see `d2m.start_reiden_phase`/`d2m.on_connect`): any
-/// Addition/AddRequestTurn/Privilege/Replace/AddDone wave still travelling
-/// under the old identity gets silently discarded the instant it crosses a
-/// node that has already re-identified (`message.add_is_intra_fragment`),
-/// so the local state it left behind is dead and nothing else revisits it.
-/// Left uncleared, `addition_active` in particular can wedge a root
-/// forever: it only ever clears on a matching `AddDone`, which an orphaned
-/// event will never produce.
-///
-/// This only protects a node that itself re-identifies. A relay just
-/// outside the re-identifying region can still be left holding a stale
-/// `pending_additions` entry from the abandoned round -- harmless: nothing
-/// revisits a completed or abandoned event's routing state (there is no
-/// retry of a same-fragment addition event; a fresh `AddTest` from
-/// `retry_abandoned_additions` starts an entirely new one), so a leftover
-/// entry is a dead dict key, not a hazard.
+/// Clear addition state when this node adopts a new fragment identity. Messages from the
+/// old round will be rejected by the fragment check, so keeping the local bookkeeping
+/// would leave the node waiting for an event that can no longer arrive.
 pub fn clear_addition_state(state: State) -> State {
   State(
     ..state,

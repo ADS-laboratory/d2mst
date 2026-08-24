@@ -46,10 +46,9 @@ fn drain(state: State) -> #(State, List(Effect)) {
 fn handle_event(state: State, event: Event) -> #(State, List(Effect)) {
   case event {
     Wakeup -> wakeup(state)
-    // TODO: wakeup should be shared between protocols?
-    // TODO: the addition response protocol starts here.
+    // Waking a node starts the initial GHS construction.
     LinkUp(edge) -> add_edge(state, edge)
-    // TODO: the failure response protocol starts here
+    // A link failure enters the repair protocol.
     LinkDown(on) -> remove_edge(state, on)
     Receive(on, msg) ->
       case dict.has_key(state.edges, on) {

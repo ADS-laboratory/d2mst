@@ -1,9 +1,5 @@
-//// Actor shell for a protocol node.
-////
-//// The only part of the node that touches processes: it feeds received
-//// messages into `node.handle` and performs the resulting effects by
-//// sending to link actors, reporting every send and every state change to
-//// the logger.
+//// Actor shell for a protocol node. It passes events to `node.handle`, executes the
+//// returned sends, and reports activity to the logger.
 
 import d2mst/algorithm
 import d2mst/graph.{type Edge, type EdgeId}

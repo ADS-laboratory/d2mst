@@ -119,9 +119,8 @@ pub type AddMsg {
 pub type Msg {
   // Plain GHS messages used to build the initial MST.
   GHSMsg(msg: GHSMsg)
-  // TODO: if messages are not delivered in order, the receiver must keep 
-  // a monotonic round counter and discard messages with a lower round than
-  // the last one it received.
+  // The current protocol assumes ordered delivery. Supporting reordering
+  // would require a monotonic round counter and stale-message checks.
   D2MMsg(msg: D2MMsg, fragment: FragmentId)
 
   AddMsg(msg: AddMsg, fragment: FragmentId)
