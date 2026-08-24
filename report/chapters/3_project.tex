@@ -390,6 +390,46 @@ topology updates that attempt to remove the same edge or reverse overlapping pat
 leaving a cycle in the MST (figure \ref{fig:overlapping_cycles}) or corrupting the tree
 structure.
 
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node/.style={circle, draw, minimum size=6mm, inner sep=0pt},
+    tree_edge/.style={ultra thick, draw=black},
+    recovered_edge/.style={thin, draw=black}
+]
+    % Define Nodes
+    \node[node] (top_l) at (-1.5, 4) {};
+    \node[node] (top_r) at (1.5, 4) {};
+    
+    \node[node] (mid_l) at (-2.5, 1.75) {};
+    \node[node] (mid_ct) at (0, 2.5) {};
+    \node[node] (mid_cb) at (0, 1) {};
+    \node[node] (mid_r) at (2.5, 1.75) {};
+    
+    \node[node] (bot_l) at (-1.5, -0.5) {};
+    \node[node] (bot_r) at (1.5, -0.5) {};
+
+    % Draw Tree Edges (Bold)
+    \draw[tree_edge] (top_l) -- (mid_l);
+    \draw[tree_edge] (top_l) -- (mid_ct);
+    \draw[tree_edge] (top_r) -- (mid_ct);
+    \draw[tree_edge] (top_r) -- (mid_r);
+    
+    \draw[tree_edge] (mid_l) -- (bot_l);
+    \draw[tree_edge] (mid_r) -- (bot_r);
+    \draw[tree_edge, red] (mid_ct) -- node[right, xshift=2mm] {$e_3$} (mid_cb); % maximum weight edge
+    
+    % Draw Special/Added Edges (Thin)
+    \draw[recovered_edge] (bot_l) -- node[below left] {$e_1$} (mid_cb);
+    \draw[recovered_edge] (bot_r) -- node[below right] {$e_2$} (mid_cb);
+
+\end{tikzpicture}
+\caption{Overlapping cycles formed by simultaneous link additions. If $e_3$ is the
+maximum-weight edge in the cycle formed by the addition of $e_1$ and $e_2$, both LCAs may
+attempt to remove $e_3$, leaving a cycle in the MST.}
+\label{fig:overlapping_cycles}
+\end{figure}
+
 To prevent these concurrent mutation races, the protocol treats the entire round as a
 fragment-wide critical section. When $u$ and $v$ discover they are in the same fragment,
 instead of immediately climbing the tree, they first send an \msg{AddRequestTurn} message
@@ -442,8 +482,14 @@ the message containing $w$, to the children that reported the maximum weight in 
 \end{itemize}
 
 The new link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is the
-weight of the maximum-weight edge in the cycle. The endpoints finally report completion to
-the root, clearing the turn for the next queued addition.
+weight of the maximum-weight edge in the cycle.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{imgs/recovery.png}
+\caption{Addition response protocol: the two addition messages travel up to the least common ancestor, and the replace phase then propagates the update along the cycle.}
+\label{fig:addition}
+\end{figure}
 
 \subparagraph{Concurrency of additions.}
 Because the entire climb-decide-execute round requires a fragment-wide turn, multiple 
