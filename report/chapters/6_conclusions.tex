@@ -1,0 +1,29 @@
+\chapter{Conclusions}
+% What has been done with respect to what has been promised in Chapters~\ref{ch:intro} and \ref{ch:analysis}, and what is left out.
+
+This project addressed the problem of maintaining a minimum spanning tree in a distributed
+network whose topology can change over time. The implementation combines a distributed GHS
+construction phase with dynamic protocols for link failures, node failures, and link
+additions.
+
+The initial MST is not supplied externally. At startup, the nodes begin as singleton
+fragments and the GHS protocol constructs the initial minimum spanning forest. Once that
+construction has converged, the dynamic protocols maintain the resulting tree. A tree-link
+failure splits a fragment and triggers a minimum outgoing edge search, while an edge
+addition identifies the heaviest edge in the resulting cycle and updates the tree when
+necessary.
+
+The project reached Tier 3 of the development plan. In particular, the implementation
+includes static GHS construction, the naive and binary-search MOE procedures, addition
+handling, cross-fragment reconnection, fragment re-identification, and mechanisms for
+concurrent failures and additions. The pure protocol state machine can be executed both
+through the OTP actor runtime and through a deterministic simulator. The validation suite
+combines unit tests and simulations validated against a Kruskal-based oracle.
+
+Tier 4 was not completed. The optional improvements proposed for that tier, such as
+further optimizations and alternative distributed median-selection techniques, were left % non è molto chiaro cosa intendiamo con optimizations forse (ne qua ne nel capitolo 3)
+out of the current version.
+
+Overall, the project provides a working implementation of a dynamic distributed MST
+protocol and a testing infrastructure for checking both its distributed execution and its
+final global result.
