@@ -132,6 +132,16 @@ is driven by something other than a direct function call.
 
 \section{Decisions made to implement the protocol}
 
+\paragraph{Incremental construction on top of GHS.}
+The implementation was built in two stages: GHS (Tier 1) first, then the dynamic
+repair protocol on top of it. This ordering was not incidental — the dynamic protocol
+needs an already-converged spanning tree to operate on, so GHS is kept in the final
+system as the mechanism that constructs that initial tree, rather than being replaced
+once Tier 2/3 were implemented. One consequence of this ordering is that failure and
+addition events are only ever injected once GHS has converged and the tree is stable;
+the two protocols were not tested interacting \emph{while} the initial tree is still
+being constructed.
+
 \paragraph{Process per edge.}
 The design already calls for one logical process per network node. The implementation
 takes the same idea further and gives every edge its own process as well
@@ -152,23 +162,176 @@ protocol modules and simply interprets the returned effects into its own event q
 instead of onto real links, so that a bug reproduced in the simulator is necessarily a bug
 in the deployed protocol.
 
-\paragraph{Message deferral.}\label{sec:defer}
-
-
 \paragraph{MOE search strategy selection.}
-
+Chapter~\ref{ch:project} describes two independent Phase 3 procedures. In the
+implementation they are a single type, \texttt{MoeStrategy} (\texttt{Naive} or
+\texttt{BinarySearch(sample\_k)}), fixed once per node at \texttt{init} and threaded
+through \texttt{failure.gleam}'s \texttt{start\_repair\_search}. Fixing the strategy at
+construction time, rather than negotiating it at every repair, reflects the fact that the
+choice is a deployment parameter of the whole network, not a per-event decision. It also
+allows both strategies to be run against the same test and benchmark infrastructure, so
+that their message counts can be compared directly.
 
 \paragraph{Hash function.}
+Chapter~\ref{ch:project}'s \textsc{TestOut} and priority-sampling steps are parameterized
+by an abstract random oracle $H$. The implementation instantiates it with SHA-256
+(\texttt{gleam\_crypto}), truncated to its low 64 bits and applied to the edge id
+$(\min(u,v), \max(u,v))$. This is large enough that the $2^{-64}$ false-negative
+probability derived in Chapter~\ref{ch:project} is negligible for any fragment size the
+tests exercise, and it reuses a standard, already-vetted primitive rather than a custom
+pseudo-random function. Each node also caches its sorted, hashed incident-edge list
+(\texttt{bs\_candidates}) for the duration of one search, rebuilding it only when the
+search restarts or the incident edge set changes, so that a \textsc{TestOut} round does
+not re-sort and re-hash the same edges from scratch every time.
 
 
 \paragraph{Interactive demo.}\label{sec:interactive-main}
 
+\texttt{d2mst.gleam} builds a random connected graph, brings it to a converged MST, and
+then repeatedly asks for a round of node and edge failures and additions, applies all of
+them as one overlapping burst with nothing allowed to settle in between, waits for
+convergence, and checks the result against \texttt{graph.kruskal} while reporting the
+message count and wall-clock time for the round. Applying a whole batch of topology
+changes at once, rather than one at a time, is deliberate: it is the piece of validation
+infrastructure that specifically exercises the property Chapter~\ref{ch:project} devotes
+the most space to, namely that concurrent, overlapping topological changes converge
+correctly.
 
 \section{Failure protocol: implementation details}
 
+The remainder of this chapter completes the description of the failure response protocol
+given in Chapter~\ref{ch:project}. It covers implementation-level choices that were not
+settled at the design stage.
+
+\subsection{Messages by phase}\label{sec:failure-messages}
+
+Chapter~\ref{ch:project} describes each phase of the failure response protocol without
+naming the concrete messages that carry it out. The messages below, all constructors of
+\texttt{D2MMsg}, are what the implementation actually sends.
+
+\begin{itemize}
+  \item \textbf{Phase 1, detection and split.} \msg{ReportFailure} carries the freshly
+  generated identity from the failed edge's parent-side endpoint up toward the fragment
+  root, one hop at a time.
+  \item \textbf{Phase 2, re-identification.} \msg{ReIden} broadcasts the new identity down
+  the tree; \msg{ReIdenAck} convergecasts the acknowledgement back up, with an internal
+  node waiting for one from every child before sending its own.
+  \item \textbf{Phase 3, naive search.} \msg{ProbeMoe} broadcasts down the tree to start
+  every node's local search. \msg{ProbeEdge} is sent to a non-tree neighbor to ask whether
+  the link between them crosses the fragment boundary, and \msg{ProbeReply} carries the
+  answer back. \msg{ReportMoe} convergecasts each subtree's best candidate edge up to the
+  parent.
+  \item \textbf{Phase 3, binary search.} \msg{BsRound} broadcasts the start of the
+  search's first, unfiltered scan of the whole fragment, and \msg{BsRoundReport}
+  convergecasts each node's contribution (its XOR, edge bounds, and priority sample). Once
+  an interval is known, \msg{BsSplit} broadcasts it split at the sampled median, and
+  \msg{BsSplitReport} convergecasts both halves' contributions. When the interval
+  collapses to a single edge, \msg{BsMoeFound} broadcasts its id so that the owning
+  endpoint can claim it.
+  \item \textbf{Phase 4, merge.} In the naive strategy, \msg{SignalConnect} routes the
+  merge request down the tree branch that holds the MOE; the binary search strategy uses
+  \msg{BsMoeFound} for the same purpose instead. \msg{Connect} is then sent by the node
+  holding the MOE to its counterpart across the boundary once it marks the edge
+  \texttt{Selected}. If a fragment finds no outgoing edge at all, \msg{GoSleep}
+  broadcasts from the root instead, putting every node into the terminal
+  \texttt{Sleeping} state.
+\end{itemize}
+
+\subsection{Fragment identity representation}\label{sec:fragment-id}
+
+\texttt{FragmentId} has three constructors, not two:
+
+\begin{itemize}
+  \item \texttt{Singleton(node)}: a fresh, not yet merged node, at level 0, before Tier 1
+  has run.
+  \item \texttt{GHSCore(edge)}: a fragment created by a Tier 1 merge, identified by its
+  core edge, exactly as in the original GHS paper.
+  \item \texttt{D2MCore(edge, node: Option(NodeId), failures\_counter)}: a fragment
+  created by the dynamic repair protocol.
+\end{itemize}
+
+The \texttt{node} field corresponds to the $u$ or $v$ that Chapter~\ref{ch:project} uses
+to break the symmetry between the two identities generated when a tree edge fails: it is
+set to \texttt{Some(endpoint)} exactly when the identity is produced by a split
+(\texttt{remove\_edge}, Phase 1), where it distinguishes the two new fragments that share
+the failed edge. A Phase 4 merge (Section~\ref{sec:phase4-impl}), by contrast, produces
+exactly one new identity for the combined fragment, so there is nothing to disambiguate
+and \texttt{node} is set to \texttt{None} in that case. \texttt{failures\_counter} is
+$k(e)$: it is incremented every time the corresponding edge fails, so that the same edge
+failing twice does not produce two identical identities.
+
+\subsection{Fragment-identity checks on messages}\label{sec:intra-fragment}
+
+Chapter~\ref{ch:project} states the discard rule at the level of intra-fragment messages
+carrying the sender's identity, with a mismatch resulting in silent discard. In the
+implementation this is not a blanket rule applied to every \texttt{D2MMsg} or
+\texttt{AddMsg}: each message type is classified once, by a predicate
+(\texttt{fail\_is\_intra\_fragment} for \texttt{D2MMsg}, \texttt{add\_is\_intra\_fragment}
+for \texttt{AddMsg}), and only messages that are meant to stay inside one stable fragment
+are checked. A few messages are exempt by design, since requiring a match would prevent
+them from ever being processed:
+
+\begin{itemize}
+  \item \msg{ReportFailure} (Phase 1) must reach the root regardless of how many times the
+  identity above it has already changed while it is in flight, since it is not itself a
+  protocol round, only a topology notification climbing the tree.
+  \item \msg{ReIden} is exempt because it is the message carrying the new identity: it
+  cannot be validated against the receiver's old one.
+  \item \msg{ProbeEdge}, \msg{ProbeReply}, and \msg{Connect} (Phase 3 and 4) cross the
+  fragment boundary by design, since testing whether an edge is outgoing requires it: the
+  sender's identity is expected to differ from the receiver's.
+\end{itemize}
+
+\subsection{Phase 3: search-state bookkeeping}\label{sec:phase3-impl}
+
+Every repair round begins by resetting the edge bookkeeping left over from a previous
+round or from the initial construction: every edge marked \texttt{Rejected} is reset to
+\texttt{Undecided}, while \texttt{Selected} edges, which form the current tree, are left
+untouched. This way, the search reconsiders every non-tree edge rather than trusting a
+verdict reached under a different fragment shape.
+
+The naive procedure's liveness depends on one further detail not implied by
+Chapter~\ref{ch:project}: if the edge a node is currently probing
+(\texttt{state.test\_edge}) is the one that just failed, the expected \msg{ProbeReply}
+will never arrive. \texttt{remove\_edge} checks for this case and, when it applies,
+immediately moves on to the next undecided edge instead of leaving the search stalled
+waiting for a reply from a process that no longer exists.
+
+\subsection{Phase 4: merge}\label{sec:phase4-impl}
+
+The two fragments involved arrive independently at the same MOE, and each marks that edge
+\texttt{Selected} on its own side before sending \msg{Connect}, with nothing forcing the
+two sends to happen at the same time. Whichever \msg{Connect} arrives first therefore
+lands on a receiver that has not yet made the same choice; that branch of
+\texttt{on\_connect} simply defers the message (Section~\ref{sec:defer}) rather than
+treating it as an error, and it is retried automatically once this side's own search
+reaches the same edge. Only once both sides have sent and received a \msg{Connect} for the
+edge does the merge proceed. Node identifiers break the symmetry exactly as in Tier 1's
+core-edge merge: the smaller identifier becomes the new root and issues the next Phase 1/2
+wave, while the larger identifier records the edge as its parent and clears the addition
+bookkeeping in the same step (Section~\ref{sec:failure-addition}), since its own
+\texttt{state.fragment} field changes at this point, before the ReIden broadcast described
+in Chapter~\ref{ch:project} reaches it.
 
 
 \section{Addition protocol: implementation details}
 
 To be completed: implementation-level details of the addition response protocol
 (Tier 3), analogous to the failure protocol section above.
+
+\subsection{Interaction with the addition protocol}\label{sec:failure-addition}
+
+Chapter~\ref{ch:project} leaves open what happens when a tree edge inside an in-progress
+addition's cycle fails while the addition is still running. No dedicated coordination code
+is needed for correctness: because both protocols are gated by the same fragment-identity
+check (Section~\ref{sec:intra-fragment}), a failure that reassigns a fragment's identity
+in the middle of an addition causes every \msg{Addition}, \msg{AddRequestTurn},
+\msg{Privilege}, \msg{Replace}, and \msg{AddDone} message still travelling under the old
+identity to be silently discarded as soon as it reaches a node that has already
+re-identified, through the same mechanism that already protects two overlapping repairs
+from each other.
+
+What does require explicit handling is the bookkeeping that an abandoned addition round
+leaves behind, since nothing else revisits it once its messages stop being delivered:
+
+// TODO:
