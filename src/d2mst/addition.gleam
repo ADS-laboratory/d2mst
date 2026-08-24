@@ -117,11 +117,8 @@ fn on_edge_test(
         False ->
           case state.fragment == reported {
             True -> {
-              // SAME FRAGMENT: the new edge forms a cycle. Ask the root for
-              // this event's turn *before* climbing to find the cycle's
-              // heaviest edge -- see `grant_addition` for why the whole
-              // climb-decide-execute round, not just the decide-execute
-              // part, has to run as one fragment-wide critical section.
+              // SAME FRAGMENT: the new edge forms a cycle. Ask the root for this event's
+              // turn before climbing to find the cycle's heaviest edge.
               relay_or_root(state, eid)
             }
             False -> {
@@ -270,11 +267,7 @@ pub fn on_addition(
           already_at_max_edge:,
         )
 
-      // Act on the decision immediately: the root already granted this
-      // event_id sole use of the fragment's addition/merge turn before
-      // either endpoint started climbing (see `grant_addition`), so no
-      // other addition event's climb or `Replace` wave can be concurrently
-      // touching this tree. There is nothing left to wait for.
+      // Act on the decision immediately: the root already granted this event_id.
       execute_decision(state, event_id, decision)
     }
     _ -> {
@@ -307,11 +300,7 @@ pub fn on_addition(
 //                  Addition Serialization                   //
 // --------------------------------------------------------- //
 
-/// Ask our parent for `event_id`'s turn, or enqueue it ourselves if we are
-/// the root. Both endpoints of a new edge independently discover "same
-/// fragment" (each from processing the other's `AddTest`) and both call
-/// this, so two requests for the same `event_id` -- possibly via different
-/// paths -- can reach the root; `root_enqueue` dedupes.
+/// Ask our parent for `event_id`'s turn, or enqueue it ourselves if we are the root.
 fn relay_or_root(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
   case state.parent_edge {
     Some(parent_edge) -> {
@@ -324,9 +313,9 @@ fn relay_or_root(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
   }
 }
 
-/// Root only: queue an event and try to start it (or whatever is next in
-/// line), unless it is already queued or running -- see `relay_or_root`'s
-/// doc for why a duplicate request is expected, not a bug.
+/// Root only: queue an event and try to start it (or whatever is next in line), unless it
+/// is already queued or running (deduplication is needed because the request is sent from
+/// both endpoints of the new edge).
 fn root_enqueue(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
   let already_pending =
     list.contains(state.addition_queue, event_id)
@@ -344,10 +333,8 @@ fn root_enqueue(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
   }
 }
 
-/// Root only: if free, pop the head of the same-fragment addition queue and
-/// grant it the fragment's turn; if that's empty, fall back to a queued
-/// cross-fragment merge request instead (see `preempt_or_keep`'s
-/// `pending_merges` doc).
+/// Root only: if free, pop the head of the same-fragment LCA queue and grant it a turn;
+/// if that's empty, fall back to a queued cross-fragment merge request instead.
 fn root_try_start(state: State) -> #(State, List(Effect)) {
   case state.addition_active {
     Some(_) -> #(state, [])
@@ -374,11 +361,9 @@ fn root_try_start(state: State) -> #(State, List(Effect)) {
   }
 }
 
-/// Root only: broadcast `event_id`'s authorization down the whole tree (it
-/// does not yet know which two nodes are the new edge's endpoints -- only
-/// they do), and start this node's own climb if it turns out to be one of
-/// them. Mirrors `on_approve_merge`'s broadcast-and-check-local-ownership
-/// shape; `on_privilege` is the relay every other node runs.
+/// Root only: broadcast `event_id`'s authorization down the whole tree (it does not know
+/// which two nodes are the new edge's endpoints), and start this node's own climb if it
+/// turns out to be one of the endpoints.
 fn grant_addition(state: State, event_id: EdgeId) -> #(State, List(Effect)) {
   let msg = message.Privilege(event_id:)
   let envelope = message.AddMsg(msg, fragment: state.fragment)
@@ -418,24 +403,20 @@ fn on_replace(
   reversing: Bool,
   should_prune: Bool,
 ) -> #(State, List(Effect)) {
-  // Only prune/reverse here if the wave arrived via our current parent edge.
-  // `parent_edge` may have moved since this node's `pending_additions` routing
-  // entry was set up in which case this node is no longer on the path the
-  // upstream `should_prune` decision was made for.
+  // Topology safety check: if our parent changed (e.g., due to a concurrent failure
+  // repair) while this Replace wave was in flight, the LCA's pruning decision is based on
+  // a stale map of the tree. We set `is_fresh = False` to safely abort the pruning and
+  // let the endpoints retry the addition later.
   let is_fresh = case state.parent_edge {
     Some(p) -> p == from_edge
     None -> True
   }
-  // Find the next hop towards the origin. Always computed to clear the
-  // `pending_additions` entry even if should_prune is false. Same-fragment
-  // addition events are serialized against each other (see
-  // `grant_addition`), so a missing entry here should never happen from
-  // that side; the one remaining source is Tier-2 failure repair, which
-  // runs legitimately concurrently with additions (fragment-id mismatch
-  // dropping and `is_fresh`, not this serialization, are what guard against
-  // that -- see their own docs). Degrading to a reported-but-unresolved
-  // dead end instead of crashing is cheap insurance against whatever
-  // interaction between the two isn't already covered.
+  // Find the next hop towards the origin to continue the Replace wave. Always computed to
+  // clear the `pending_additions` entry even if should_prune is false. Because
+  // same-fragment additions are strictly serialized, this routing entry should always
+  // exist. However, concurrent failures can wipe this state (via `clear_addition_state`).
+  // If the entry is missing, we've hit a `dead_end`: we abort and send an `AddDone`
+  // report to the root, ensuring the fragment's addition lock is released.
   let #(next_hop, dead_end) = case state.id == target_origin {
     True -> #(option.None, False)
     False ->
@@ -501,15 +482,8 @@ fn on_replace(
       pending_additions: dict.delete(state.pending_additions, event_id),
     )
 
-  // If we are the target_origin, promote the new edge to the tree and report
-  // completion to the root. `dead_end` also reports completion here, even
-  // though this node isn't `target_origin`: the LCA is waiting for exactly
-  // one `AddDone` from this branch to complete its `replace_wait_countdown`
-  // (see `execute_decision` / `on_add_done`), and this wave has nowhere
-  // left to forward to, so it is the only node left that ever will report.
-  // Skipping it would wedge `replace_wait_countdown` forever, which wedges
-  // `addition_active` at the root, which blocks every future addition in
-  // this fragment.
+  // If we reached the end of the wave (target_origin) OR the path is broken (dead_end),
+  // we must report completion.
   let #(state, done_effects) = case state.id == target_origin || dead_end {
     True -> {
       let state = case state.id == target_origin {
@@ -536,8 +510,7 @@ fn on_replace(
             }
             Error(_) -> state
           }
-        // A dead end at a non-origin node has no local edge to attach --
-        // only the node that actually reaches `target_origin` (if any) does.
+        // A dead end has no local edge to attach.
         False -> state
       }
       forward_or_finish(state, event_id)
@@ -629,28 +602,14 @@ fn on_approve_merge(
   }
 }
 
-/// Root-only: commit this root to `add_edge` (set `addition_active`) and
-/// either merge immediately, if this root itself owns the edge (the Case-1
-/// direct path in `on_edge_test`), or broadcast the approval down the tree
-/// for whichever descendant does (the `AddRequestMergePartition` path).
-/// Unifying both into one function is what lets `root_try_start` retry a
-/// queued `pending_merges` entry without caring which of the two situations
-/// originally queued it.
+/// Root only: authorize a cross-fragment merge and claim the fragment's turn.
+/// 
+/// - If this root owns the edge itself, it initiates the merge directly.
+/// - If a descendant owns the edge, it broadcasts approval down the tree.
 ///
-/// When this root owns `add_edge` itself, it must not claim the slot for an
-/// edge that is no longer eligible (`via_addition` already cleared, or
-/// already `Selected` from some other path -- both possible if this call
-/// came from `pending_merges` and time passed between queuing and this
-/// retry, e.g. the two fragments meanwhile merged some other way and
-/// `retry_abandoned_additions` already resolved this exact edge as an
-/// ordinary same-fragment cycle). `merge` itself would just silently no-op
-/// on a `Selected` edge without ever sending `Connect` -- and with
-/// `addition_active` already set, nothing would ever produce the `AddDone`
-/// needed to free it again, wedging this root forever. Skip straight to the
-/// next candidate instead. A remotely-owned edge can't be checked this way
-/// (this root has no visibility into the owner's status); `merge`'s own
-/// idempotency guard still protects that side from acting twice, at the
-/// cost of the same root-wedge risk in that narrower, harder-to-hit case.
+/// Lock Safety Check: If this root owns the edge, we first verify it is still
+/// `Undecided`. If this request was sitting in the `pending_merges` queue, the network
+/// topology might have changed in the meantime.
 fn approve_merge(state: State, add_edge: EdgeId) -> #(State, List(Effect)) {
   case dict.get(state.edges, add_edge) {
     Ok(info) if info.status == Undecided && info.via_addition -> {
@@ -673,52 +632,6 @@ fn approve_merge(state: State, add_edge: EdgeId) -> #(State, List(Effect)) {
 /// - run `execute` if the root is currently free, or if `candidate` outranks whatever is
 ///   already active; otherwise,
 /// - queue `candidate` in `pending_merges` for its turn once the active one settles.
-///
-/// Two different new edges concurrently reconnecting the very same pair of
-/// fragments get decided by each fragment's *own* root independently --
-/// there is no message exchange between the two roots to agree on one, so
-/// both must break the tie the same way without talking to each other.
-/// Ordering on the bare `EdgeId` (not weight: a request arriving via
-/// `AddRequestMergePartition` only carries the id, not the edge, and the
-/// root does not necessarily own it) is enough: both roots see the same
-/// pair of ids and pick the same winner.
-///
-/// Abandoning an already-active `candidate` must also retract the local
-/// commitment it made: `state.edges[current]` was set `Selected` (and a
-/// `Connect` sent) the moment it became active, via the Case-1 direct path
-/// in `on_edge_test` where the root is necessarily the edge's own owner --
-/// left in place, that stale `Selected` and the new winner's own `Selected`
-/// together form an actual cycle in the tree (two edges both marked as
-/// spanning the same fragment pair), and a `ReIden` wave started over the
-/// new winner loops through it forever instead of terminating. Retracting
-/// is safe: a mutual `Connect` would already have reassigned this root's own
-/// fragment (clearing `addition_active` via `node.clear_addition_state`
-/// before we'd ever get here), so `Selected`-but-unconfirmed is local-only
-/// state nothing else depends on yet.
-///
-/// Queuing (rather than dropping outright) matters even when `candidate`
-/// loses the tie-break: the operation currently occupying `addition_active`
-/// may be an ordinary same-fragment cycle resolution with no relation to
-/// `candidate`'s target fragment at all, and it *will* finish and free the
-/// slot via `handle_root_add_done` -- but nothing else would ever come back
-/// and re-ask on `candidate`'s behalf (confirmed reproducible: seed 4, i=20
-/// of `fuzz_long_running_random_topology_test` -- a same-fragment cycle
-/// event occupies the root exactly while a new singleton node's merge
-/// request arrives, the request is dropped, and since no failure repair is
-/// involved the requester never re-enters `Sleeping` to trigger
-/// `retry_abandoned_additions` either, stranding the singleton as a
-/// permanent extra root).
-///
-/// A `RunningAddition` is never evicted, regardless of the tie-break: it
-/// holds the turn for its whole climb-decide-execute round now (see
-/// `grant_addition`), not just a brief decide-execute window, and evicting
-/// it mid-round would let its still-in-flight climb/`Replace` messages go
-/// on mutating the tree after the root has already handed the turn to this
-/// merge -- exactly the concurrent-mutation race this serialization exists
-/// to prevent. The tie-break only exists to let two roots agree on one
-/// winner between two *merges* without talking to each other; a
-/// same-fragment cycle has no such requirement, so queuing behind it is
-/// always sound.
 fn preempt_or_keep(
   state: State,
   candidate: EdgeId,
@@ -747,10 +660,8 @@ fn preempt_or_keep(
   }
 }
 
-/// Reset an edge this node itself decided (`Selected`, not yet `confirmed`)
-/// back to `Undecided`, so it is reconsidered fresh instead of being left as
-/// a dangling stale commitment. A no-op if this node isn't the edge's owner
-/// or the edge was never locally decided.
+/// Reset an edge this node itself decided (`Selected`, not yet `confirmed`) back to
+/// `Undecided`.
 fn retract(state: State, eid: EdgeId) -> State {
   case dict.get(state.edges, eid) {
     Ok(info) if info.status == Selected && !info.confirmed -> {
@@ -799,11 +710,8 @@ fn merge(
   }
 }
 
-/// Relay of the root's `Privilege` broadcast authorizing `event_id`: forward
-/// it on down the tree, and if this node itself owns `event_id` (is one of
-/// the new edge's two endpoints), start climbing. Mirrors
-/// `on_approve_merge`'s broadcast-and-check-local-ownership shape; see
-/// `grant_addition` for the root's own copy of the local-ownership check.
+/// Relay of the root's `Privilege` broadcast authorizing `event_id`: forward it down the
+/// tree, and if this node itself is one of the new edge's two endpoints, start climbing.
 fn on_privilege(
   state: State,
   on: EdgeId,
@@ -832,9 +740,8 @@ fn on_privilege(
   }
 }
 
-/// An intermediate node between the requester and the root, relaying its
-/// request for `event_id`'s turn onward. Mirrors `on_addition`'s `Error`
-/// branch, but for `AddRequestTurn` instead of `Addition`.
+/// An intermediate node between the requester and the root, relaying its request for
+/// `event_id`'s turn onward.
 fn on_request_turn(
   state: State,
   _from_edge: EdgeId,
@@ -843,11 +750,7 @@ fn on_request_turn(
   relay_or_root(state, event_id)
 }
 
-/// Forward `AddDone` up the standing parent chain, or handle it if we are
-/// the root. The LCA that originally decided this event intercepts its
-/// own two acks here (see `execute_decision`'s `replace_wait_countdown`)
-/// and only lets a single, aggregate `AddDone` continue past itself; every
-/// other node is just a relay and has no entry to intercept.
+/// Forward `AddDone` up the standing parent chain, or handle it if we are the root.
 fn on_add_done(
   state: State,
   _from_edge: EdgeId,
@@ -883,10 +786,7 @@ fn on_add_done(
   }
 }
 
-/// The LCA acting on the decision it just computed, immediately: the root's
-/// `Privilege` broadcast already authorized this event's whole round before
-/// either endpoint started climbing (see `grant_addition`), so there is no
-/// separate turn left to wait for once both `Addition` branches converge.
+/// The LCA acting on the decision it just computed.
 pub fn execute_decision(
   state: State,
   event_id: EdgeId,

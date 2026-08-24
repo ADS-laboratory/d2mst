@@ -502,6 +502,19 @@ Because each fragment maintains its own root and serialization queue, inter-frag
 additions (and their respective tree updates) safely execute in parallel across the
 network.
 
+\subparagraph{Failures during an addition.}
+While additions within the same fragment are serialized against each other, they can still
+run concurrently with link \emph{failures}. If a tree link fails while an addition's
+\msg{Replace} wave is traveling down the cycle, the failure response protocol will begin
+re-routing the tree to repair it. 
+
+If the \msg{Replace} wave blindly executed its pruning decision on this shifting topology,
+it could accidentally disconnect the network. To prevent this, as the \msg{Replace} wave
+travels, each node verifies that the message arrived via its \emph{current} parent in the
+tree. 
+
+If the node's parent has changed since the addition started, the node detects that the LCA's decision was based on stale topological data. The node immediately neutralizes the wave—forwarding it solely to clean up routing state and report completion to the root, but skipping all tree mutations (no edges are pruned and no parents are reversed). The new link is left as undecided, allowing the endpoints to safely retry the addition once the failure repair has converged and the tree is stable again.
+
 \paragraph{Different fragments.}
 If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
 there can be two different cases:
