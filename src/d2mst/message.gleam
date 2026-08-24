@@ -93,20 +93,19 @@ pub type AddMsg {
     should_prune: Bool,
   )
 
-  /// Sent by an LCA once both `Addition` branches converged on it, up
-  /// toward the root, so the root can serialize it against other
-  /// concurrently-converging additions (report ch. 3, "Overlapping cycles
-  /// serialization"). Deliberately a distinct message from `Addition`
-  /// rather than a continuation of it: from a relaying node's own local
-  /// view, "first `Addition` for this event, forward it up" is
-  /// indistinguishable between "I might be the LCA, wait for a sibling"
-  /// and "the LCA further down already resolved this, I'm just relaying
-  /// its request" -- the message type is what tells them apart.
+  /// Sent by whichever endpoint's `AddTest` first discovers `event_id`
+  /// forms a same-fragment cycle, up toward the root, asking for the
+  /// fragment's addition/merge turn *before* either endpoint starts
+  /// climbing to find the cycle (report ch. 3, "Overlapping cycles
+  /// serialization"). Both endpoints independently make this same
+  /// discovery and may each send one; the root dedupes.
   AddRequestTurn(event_id: EdgeId)
 
-  /// Token sent by the root down to the LCA (and only the LCA -- routing
-  /// stops there, see `addition.execute_or_route`) authorizing it to act
-  /// on the decision it already computed.
+  /// Root -> whole tree: `event_id` has the fragment's turn. Whichever two
+  /// nodes are its endpoints (only they know) start climbing to find the
+  /// cycle's heaviest edge on receipt; every other node just relays it.
+  /// Broadcasting is what lets both endpoints' climbs start regardless of
+  /// which of them originally asked -- see `addition.grant_addition`.
   Privilege(event_id: EdgeId)
 
   /// Sent by whichever node finishes a `Replace` chain (winning or losing

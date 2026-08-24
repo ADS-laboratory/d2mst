@@ -484,7 +484,10 @@ pub fn stale_pending_addition_ignored_after_fragment_change_test() {
       graph.edge_id(0, 1),
     )
 
-  // The stale entry is discarded, and the new message is stored in pending_additions.
-  dict.has_key(updated_state.ready_replace, edge_id) |> should.be_false
-  dict.has_key(updated_state.pending_additions, edge_id) |> should.be_true
+  // The stale entry is discarded, not treated as the LCA's second branch
+  // (which would have deleted it instead): the new message is stored fresh
+  // in pending_additions, tagged with the current fragment.
+  let assert Ok(#(_msg, _from_edge, stored_fragment)) =
+    dict.get(updated_state.pending_additions, edge_id)
+  stored_fragment |> should.equal(new_fragment)
 }

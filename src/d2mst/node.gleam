@@ -63,12 +63,14 @@ pub type EdgeInfo {
   )
 }
 
-/// What an LCA decided once both `Addition` branches converged on it,
-/// stashed until the root's `Privilege` token authorizes acting on it.
-/// `target_origin`/`next_edge` name the branch that reported the cycle's
-/// heaviest edge (which gets pruned); `other_origin`/`other_next_edge` name
-/// the other branch (which only needs its own side of the new edge
-/// attached, no pruning or reversal).
+/// What an LCA decides once both `Addition` branches converge on it.
+/// Acted on immediately (see `addition.execute_decision`): the root's
+/// `Privilege` broadcast already authorized this event's whole round before
+/// either endpoint started climbing, so there is no later turn left to wait
+/// for. `target_origin`/`next_edge` name the branch that reported the
+/// cycle's heaviest edge (which gets pruned); `other_origin`/
+/// `other_next_edge` name the other branch (which only needs its own side
+/// of the new edge attached, no pruning or reversal).
 pub type ReplaceDecision {
   ReplaceDecision(
     should_prune: Bool,
@@ -80,6 +82,14 @@ pub type ReplaceDecision {
     max_edge: EdgeId,
     already_at_max_edge: Bool,
   )
+}
+
+/// Root-side: what currently occupies the fragment's one addition/merge
+/// turn. See `State.addition_active` for why this must be tagged rather
+/// than a bare `EdgeId`.
+pub type ActiveTurn {
+  RunningAddition(event_id: EdgeId)
+  RunningMerge(add_edge: EdgeId)
 }
 
 /// The node state machine.
@@ -121,30 +131,38 @@ pub type State {
     /// Pending additions, waiting for the other branch to arrive at the LCA.
     /// The third element is the fragment id this node had when the entry
     /// was stored: a re-identification (Phase 1/2, or `d2m.on_connect`'s
-    /// merge) clears these outright (see `clear_addition_state`), but that
-    /// only catches the entry if *this* node is the one that re-identifies.
-    /// A relay node the abandoned round already passed through, sitting
-    /// just outside the re-identifying region, keeps its entry -- the tag
-    /// lets `addition.on_addition` recognize it as stale the next time a
-    /// live round for the same event_id passes through, instead of
-    /// wrongly treating it as a genuine sibling arrival.
+    /// merge) clears these outright (see `clear_addition_state`).
+    ///
+    /// Only ever populated while `addition_active` holds this event's
+    /// `RunningAddition` -- the root grants one same-fragment addition
+    /// event a fragment-wide turn *before* either endpoint starts climbing
+    /// (see `addition.on_edge_test` / `addition.grant_addition`), so no
+    /// other addition event's climb or `Replace` wave can be touching the
+    /// tree while this one runs. That is what makes a plain "first arrival
+    /// stores, second arrival is the LCA" check sufficient here: with only
+    /// one event live at a time, a stored entry can only ever belong to
+    /// this same event's other branch.
     pending_additions: Dict(EdgeId, #(message.AddMsg, EdgeId, FragmentId)),
-    /// Every node strictly between an LCA and the root, on the path an
-    /// `AddRequestTurn` travelled: event id -> the child edge to route the
-    /// matching `Privilege` back down to. Never populated at the LCA
-    /// itself (it has `ready_replace` instead) nor below it.
-    turn_routing: Dict(EdgeId, EdgeId),
-    /// LCA-side: decisions computed once both `Addition` branches
-    /// converged, waiting for their `Privilege` token before acting.
-    ready_replace: Dict(EdgeId, ReplaceDecision),
     /// LCA-side: how many of the two branches' `AddDone` acks are still
     /// outstanding for an event currently being executed.
     replace_wait_countdown: Dict(EdgeId, Int),
-    /// Root-side: addition events waiting their turn, in arrival order.
+    /// Root-side: same-fragment addition events waiting for a turn, in
+    /// arrival order. Queued the moment `AddTest` discovers the cycle --
+    /// before either endpoint climbs, not after a decision is already
+    /// made -- so the whole climb-decide-execute round runs as one
+    /// fragment-wide critical section (see `ActiveTurn`).
     addition_queue: List(EdgeId),
-    /// Root-side: the event currently authorized to run, if any. The root
-    /// only grants the next queued event once this clears.
-    addition_active: Option(EdgeId),
+    /// Root-side: whichever single thing -- a same-fragment addition event
+    /// running its whole round, or a cross-fragment merge -- currently owns
+    /// the fragment's one addition/merge turn. Tagged (not a bare `EdgeId`)
+    /// so `preempt_or_keep` can tell the two apart: a merge may preempt
+    /// another merge (the tie-break both roots must agree on without
+    /// talking), but must never preempt a same-fragment round, or the
+    /// round's still-in-flight climb/`Replace` messages would go on
+    /// mutating the tree after the root has already moved on to something
+    /// else, reopening exactly the concurrent-mutation races this
+    /// serialization exists to prevent.
+    addition_active: Option(ActiveTurn),
     /// Root-side: cross-fragment merge requests that arrived while
     /// `addition_active` was already busy with something else and lost
     /// `preempt_or_keep`'s tie-break, in arrival order. Retried, one at a
@@ -222,8 +240,6 @@ pub fn init_with_strategy(
     bs_right: message.bs_scan_zero,
     bs_candidates: None,
     pending_additions: dict.new(),
-    turn_routing: dict.new(),
-    ready_replace: dict.new(),
     replace_wait_countdown: dict.new(),
     addition_queue: [],
     addition_active: None,
@@ -345,14 +361,15 @@ pub fn branch_edges_except(
 ///
 /// This only protects a node that itself re-identifies. A relay just
 /// outside the re-identifying region can still be left holding a stale
-/// `pending_additions` entry -- see that field's doc for the complementary,
-/// self-defending fix in `addition.on_addition`.
+/// `pending_additions` entry from the abandoned round -- harmless: nothing
+/// revisits a completed or abandoned event's routing state (there is no
+/// retry of a same-fragment addition event; a fresh `AddTest` from
+/// `retry_abandoned_additions` starts an entirely new one), so a leftover
+/// entry is a dead dict key, not a hazard.
 pub fn clear_addition_state(state: State) -> State {
   State(
     ..state,
     pending_additions: dict.new(),
-    turn_routing: dict.new(),
-    ready_replace: dict.new(),
     replace_wait_countdown: dict.new(),
     addition_queue: [],
     addition_active: None,
