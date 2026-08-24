@@ -383,31 +383,41 @@ new link $e$ introduces a cycle with the existing tree edges.
 To preserve the MST property, the maximum-weight edge in that cycle must be identified and
 removed. The addition response proceeds in three phases.
 
-% TODO: Failure during addition:
-% - A link in the cycle fails during an addition: the messages will be discarded because they
-%   contain the old fragment identity. - NON SERVE? (capitolo 4.3)
+\subparagraph{Overlapping cycles serialization.}
+Multiple concurrent additions within the same fragment may involve overlapping cycles.
+Processing them independently leads to race conditions: two LCAs could concurrently issue 
+topology updates that attempt to remove the same edge or reverse overlapping paths,
+leaving a cycle in the MST (figure \ref{fig:overlapping_cycles}) or corrupting the tree
+structure.
 
-% TODO: When changing the graph because of an addition we need to hold messages - NON SERVE? (capitolo 4.3)
+To prevent these concurrent mutation races, the protocol treats the entire round as a
+fragment-wide critical section. When $u$ and $v$ discover they are in the same fragment,
+instead of immediately climbing the tree, they first send an \msg{AddRequestTurn} message
+toward the root. The root acts as a central coordinator, queuing these requests and
+granting a single fragment-wide turn at a time (both endpoints independently make this
+discovery and may each send a request; the root deduplicates them).
+
+When the root is free, it authorizes the next queued addition by broadcasting a
+\msg{Privilege} token down the entire tree (since the root does not know which nodes are 
+the endpoints of the new edge). Only the two endpoints of the authorized link react to
+this broadcast.
 
 \subparagraph{LCA.}
-If $u$ and $v$ share the same fragment identity, each sends a
-\msg{Addition}$\langle id,\, w(e)\, a,\, w \rangle$ message toward the root of the fragment,
-where $w(e)$ is the weight of the new link, $a$ is the id of the node and $w$ is the 
-running maximum weight along the path traversed so far.
-Each intermediate node $z$ forwards the message to its parent, updating the running
-maximum to $w' = \max\{w,\, w(\text{link to parent of } z)\}$.
+Upon receiving the \msg{Privilege} broadcast for their link, $u$ and $v$ each send an
+\msg{Addition}$\langle id,\, w(e),\, a,\, w \rangle$ message toward the root of the
+fragment, where $w(e)$ is the weight of the new link, $a$ is the id of the node and $w$ is
+the running maximum weight along the path traversed so far. Each intermediate node $z$
+forwards the message to its parent, updating the running maximum to $w' = \max\{w,\,
+w(\text{link to parent of } z)\}$.
 
-The two messages propagate upward until they converge at the \emph{least
-common ancestor} $\mathrm{lca}(u,v)$: the first node that receives two \msg{Addition}
-messages for the same addition event, one arriving from the subtree containing $u$ and one
-from the subtree containing $v$.
+The two messages propagate upward until they converge at the \emph{least common ancestor}
+$\mathrm{lca}(u,v)$: the first node that receives two \msg{Addition} messages for the same
+addition event.
 
-The first \msg{Addition} message to arrive at $\mathrm{lca}(u,v)$ will travel to the root,
-while the second is blocked to avoid parents of $\mathrm{lca}(u,v)$ mistakenly receiving
-two \msg{Addition} messages and incorrectly concluding that they are the LCA.
-
-At this point $\mathrm{lca}(u,v)$ holds the weight of the heaviest edge in
-the cycle.
+At this point, $\mathrm{lca}(u,v)$ holds the weight of the heaviest edge in the cycle. 
+Because the root has already granted this event exclusive use of the fragment's addition 
+turn, no other addition event's climb or replace wave can be concurrently touching the
+tree. There is nothing left to wait for, so the LCA proceeds immediately.
 
 \subparagraph{Update Topology.}
 
@@ -427,156 +437,24 @@ the message containing $w$, to the children that reported the maximum weight in 
         \msg{Replace}$\langle id,\, w(e), \infty \rangle$.
   \item A node, that is not $u$ or $v$, that receives a \msg{Replace} message with $w = \infty$ 
         forwards it to the next node in the cycle and then reverses the parent-child relation.
-  \item When $u$ (resp. $v$) receives a \msg{Replace} message with $a = u$(resp. $a = v$) and 
-        $w = \infty$, adds the new link $(u,v)$ (resp. $(v,u)$) to the MST.
+  \item When $u$ (resp. $v$) receives a \msg{Replace} message with $a = u$ (resp. $a = v$) and 
+        $w = \infty$, it adds the new link $(u,v)$ (resp. $(v,u)$) to the MST.
 \end{itemize}
 
-The new link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is
-the weight of the maximum-weight edge in the cycle.
+The new link $e$ is now part of the MST iff $w(e) < w_{\max}$, where $w_{\max}$ is the
+weight of the maximum-weight edge in the cycle. The endpoints finally report completion to
+the root, clearing the turn for the next queued addition.
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=\linewidth]{imgs/recovery.png}
-\caption{Addition response protocol: the two addition messages travel up to the least common ancestor, and the replace phase then propagates the update along the cycle.}
-\label{fig:addition}
-\end{figure}
+\subparagraph{Concurrency of additions.}
+Because the entire climb-decide-execute round requires a fragment-wide turn, multiple 
+additions \emph{within the same fragment} are strictly serialized. While this limits 
+intra-fragment parallelism, it provides a robust guarantee against concurrent mutation 
+deadlocks and race conditions.
 
-\subparagraph{Overlapping cycles serialization.}
-
-Multiple concurrent additions within the same fragment may involve overlapping cycles.
-
-Processing them independently may lead to inconsistencies: two LCAs may each remove the
-same edge, leaving a cycle in the MST (figure \ref{fig:overlapping_cycles}).
-
-\begin{figure}[htbp]
-\centering
-\begin{tikzpicture}[
-    node/.style={circle, draw, minimum size=6mm, inner sep=0pt},
-    tree_edge/.style={ultra thick, draw=black},
-    recovered_edge/.style={thin, draw=black}
-]
-    % Define Nodes
-    \node[node] (top_l) at (-1.5, 4) {};
-    \node[node] (top_r) at (1.5, 4) {};
-    
-    \node[node] (mid_l) at (-2.5, 1.75) {};
-    \node[node] (mid_ct) at (0, 2.5) {};
-    \node[node] (mid_cb) at (0, 1) {};
-    \node[node] (mid_r) at (2.5, 1.75) {};
-    
-    \node[node] (bot_l) at (-1.5, -0.5) {};
-    \node[node] (bot_r) at (1.5, -0.5) {};
-
-    % Draw Tree Edges (Bold)
-    \draw[tree_edge] (top_l) -- (mid_l);
-    \draw[tree_edge] (top_l) -- (mid_ct);
-    \draw[tree_edge] (top_r) -- (mid_ct);
-    \draw[tree_edge] (top_r) -- (mid_r);
-    
-    \draw[tree_edge] (mid_l) -- (bot_l);
-    \draw[tree_edge] (mid_r) -- (bot_r);
-    \draw[tree_edge, red] (mid_ct) -- node[right, xshift=2mm] {$e_3$} (mid_cb); % maximum weight edge
-    
-    % Draw Special/Added Edges (Thin)
-    \draw[recovered_edge] (bot_l) -- node[below left] {$e_1$} (mid_cb);
-    \draw[recovered_edge] (bot_r) -- node[below right] {$e_2$} (mid_cb);
-
-\end{tikzpicture}
-\caption{Overlapping cycles formed by simultaneous link additions. If $e_3$ is the
-maximum-weight edge in the cycle formed by the addition of $e_1$ and $e_2$, both LCAs may
-attempt to remove $e_3$, leaving a cycle in the MST.}
-\label{fig:overlapping_cycles}
-\end{figure}
-
-Naively, we could try to avoid this problem by making nodes that forwarded an
-\msg{Addition} message wait until the LCA has completed the response protocol before
-forwarding any other \msg{Addition} message.
-
-However, this approach may lead to deadlocks: two LCAs may each wait for a message that
-has been blocked by the other's addition process (figure \ref{fig:lca_serialization}).
-
-\begin{figure}[htbp]
-\centering
-\begin{tikzpicture}[
-    node/.style={circle, draw, minimum size=5mm, inner sep=0pt},
-    tree_edge/.style={ultra thick, draw=black},
-    recovered_edge/.style={thin, draw=black}
-]
-    % Tree Hierarchy Layout
-    \node[node, label=left:{\small root}] (root) at (0, 5) {};
-    \node[node, label=left:{\small lca($e'$)}] (lca_ep) at (0, 3.8) {};
-    \node[node, label=left:{\small lca($e$)}] (lca_e) at (0, 2.5) {};
-    \node[node, label=below left:{\small $x$}] (x) at (0, 1.2) {};
-    
-    % Left branch nodes
-    \node[node] (mid_l1) at (-2, 2.5) {};
-    \node[node, label=below:{\small $u$}] (u) at (-2, 0) {};
-    
-    % Inner branch nodes
-    \node[node, label=below:{\small $v$}] (v) at (-1, 0) {};
-    \node[node, label=below:{\small $u'$}] (up) at (1, 0) {};
-    
-    % Right branch nodes
-    \node[node] (mid_r1) at (2, 2.5) {};
-    \node[node, label=below:{\small $v'$}] (vp) at (2, 0) {};
-
-    % Draw Tree Edges (Bold)
-    \draw[tree_edge] (root) -- (lca_ep);
-    \draw[tree_edge] (lca_ep) -- (lca_e);
-    \draw[tree_edge] (lca_e) -- (x);
-    
-    \draw[tree_edge] (lca_e) -- (mid_l1);
-    \draw[tree_edge] (mid_l1) -- (u);
-    
-    \draw[tree_edge] (x) -- (v);
-    \draw[tree_edge] (x) -- (up);
-    
-    \draw[tree_edge] (lca_ep) -- (mid_r1);
-    \draw[tree_edge] (mid_r1) -- (vp);
-
-    % Draw Recovered Non-Tree Edges (Thin Horizontal Links)
-    \draw[recovered_edge] (u) -- node[above] {$e$} (v);
-    \draw[recovered_edge] (up) -- node[above] {$e'$} (vp);
-
-\end{tikzpicture}
-\caption{Both $lca(e)$ and $lca(e')$ will not receive messages on one side of the cycle.}
-\label{fig:lca_serialization}
-\end{figure}
- 
-To avoid this, the root serializes additions using a token. The serialization order is
-determined by the order in which the root receives \msg{Addition} messages from its
-children. The first \msg{Addition} message to arrive is processed immediately, while any
-subsequent \msg{Addition} messages are queued until the first addition is complete.
-
-So, when there aren't other additions in progress, the root pops the first \msg{Addition}
-message from its queue and it responds with \msg{Privilege}$\langle id,\, w \rangle$,
-which travels down the same path and then around the cycle, releasing any blocked
-\msg{Addition}$\langle id,\, w,\, _,\, _ \rangle$ messages it encounters. Note that only
-addition messages with $w$ weight (i.e. for the event selected by the root) are released,
-while other addition messages remain blocked until their turn comes.
-
-A node holding a blocked \msg{Addition}$\langle id,\, w,\, _,\, _ \rangle$ forwards it
-upon receiving \msg{Privilege}$\langle id,\, w \rangle$, allowing the LCA to eventually
-collect both halves of the addition.
-
-The root thus enforces a total order on concurrent additions, eliminating all deadlocks.
-
-\subparagraph{Concurrency of non-overlapping additions.}
-
-Although the root imposes a total order on addition events by issuing \msg{Privilege}
-tokens, this serialization does not prevent concurrent execution across the network. 
-
-First, the discovery phase is fully distributed. When multiple links are added, their
-endpoints independently propagate \msg{Addition} messages up to their respective LCAs. The
-computation of the maximum-weight edge for each cycle happens entirely in parallel before
-the root is ever involved.
-
-Second, the root acts as a dispatcher rather than a blocking bottleneck. By issuing
-\msg{Privilege} tokens sequentially down the tree, the root pipelines the resolution
-phases. Because non-overlapping cycles consist of disjoint sets of tree edges, their
-respective \msg{Privilege} and \msg{Replace} messages route through completely different
-subtrees. They do not compete for the same links or node states. Consequently, once the
-tokens are dispatched, multiple topology updates safely execute in parallel.
+However, additions occurring in \emph{different} fragments remain completely independent. 
+Because each fragment maintains its own root and serialization queue, inter-fragment 
+additions (and their respective tree updates) safely execute in parallel across the
+network.
 
 \paragraph{Different fragments.}
 If $u$ and $v$ are in different fragments (i.e., they have different fragment identities),
