@@ -678,27 +678,13 @@ fn merge(
   edge_info: EdgeInfo,
   effects: List(Effect),
 ) -> #(State, List(Effect)) {
-  // Idempotency guard: `on_request_merge` has no dedup for concurrent
-  // `AddRequestMergePartition`s on the same edge, and a dense burst of
-  // unrelated repairs can make `retry_abandoned_additions` re-fire a fresh
-  // `AddTest` for this edge before an earlier request/approval round has
-  // finished landing everywhere -- so this can legitimately be called more
-  // than once for the same `edge_id`. Only the first call may still send
-  // `Connect`: a second one would make the peer's `on_connect` re-run its
-  // mutual-merge reaction (fragment change, then either start a fresh
-  // `ReIden` wave or re-attach as a child) for an edge it already merged,
-  // which is what used to compound into an unbounded `ReIden` storm.
+  // Can be called more than once for the same `edge_id`. Only the first call send
+  // `Connect`.
   case edge_info.status == Selected {
     True -> #(state, effects)
     False -> {
-      // We own the edge and are authorized to reconnect over it. Promote it
-      // to a tree edge and hand off to `d2m.on_connect`, exactly like a
-      // GHS/D2M Merge: it waits (defers) until the peer has independently
-      // done the same on its side, then breaks the tie by node id and
-      // starts the ReIden wave on the smaller side. This is the same
-      // rendezvous the failure repair protocol uses to fuse two fragments
-      // back together, so there is no addition-specific merge logic to
-      // write here.
+      // We own the edge and are authorized to reconnect over it. Promote it to a tree
+      // edge and hand off to `d2m.on_connect`.
       let updated_info = EdgeInfo(..edge_info, status: Selected)
       let state =
         State(..state, edges: dict.insert(state.edges, edge_id, updated_info))
@@ -792,132 +778,113 @@ pub fn execute_decision(
   event_id: EdgeId,
   decision: ReplaceDecision,
 ) -> #(State, List(Effect)) {
-  // Both waves always go out, whether or not there is anything to prune:
-  // every intermediate node on both origin-to-LCA paths is still holding a
-  // `pending_additions` entry for `event_id` that only a Replace wave (see
-  // `on_replace`) clears. Only the actual edge mutations below are gated
-  // on `decision.should_prune`.
-  {
-    // We are the originator of the Replace wave(s), so `on_replace` never
-    // runs for us. If we are ourselves adjacent to the heaviest edge (i.e.
-    // it *is* the branch we are about to forward on), drop it here and
-    // mark the message as already past the cut, mirroring what
-    // `on_replace` does for every other node it passes through.
-    let state = case decision.should_prune && decision.already_at_max_edge {
-      True -> {
-        let assert Ok(info) = dict.get(state.edges, decision.max_edge)
-        State(
-          ..state,
-          edges: dict.insert(
-            state.edges,
-            decision.max_edge,
-            EdgeInfo(..info, status: Undecided, via_addition: False),
-          ),
-        )
-      }
-      False -> state
-    }
-
-    // `on_replace` promotes the new edge to `Selected` only on whichever
-    // origin *receives* the wave. If we are ourselves one of the two
-    // origins, promote our own side locally instead, since we will
-    // never receive our own message. `status`/`confirmed` only change when
-    // there is something to prune -- a no-op leaves the new edge
-    // unselected -- but `via_addition` clears either way, same reasoning as
-    // `on_replace`'s matching fix: a no-op result must not permanently hide
-    // this edge from `node.min_undecided_edge`'s Phase 3 search.
-    let target_is_self = decision.target_origin == state.id
-    let other_is_self = decision.other_origin == state.id
-    let state = case target_is_self || other_is_self {
-      True -> {
-        let assert Ok(info) = dict.get(state.edges, event_id)
-        let updated_info = case decision.should_prune {
-          True ->
-            // Same reasoning as `on_replace`: this is the self-origin case
-            // of the same cycle-path resolution, so it is confirmed the
-            // same way -- see the comment there.
-            EdgeInfo(
-              ..info,
-              status: Selected,
-              confirmed: True,
-              via_addition: False,
-            )
-          False -> EdgeInfo(..info, via_addition: False)
-        }
-        State(..state, edges: dict.insert(state.edges, event_id, updated_info))
-      }
-      False -> state
-    }
-
-    let winner_effects = case target_is_self {
-      True -> []
-      False -> {
-        let replace_msg =
-          message.Replace(
-            event_id:,
-            target_origin: decision.target_origin,
-            max_weight: decision.max_weight,
-            max_edge: decision.max_edge,
-            reversing: decision.should_prune && decision.already_at_max_edge,
-            should_prune: decision.should_prune,
-          )
-        [
-          node.Send(
-            decision.next_edge,
-            message.AddMsg(replace_msg, fragment: state.fragment),
-          ),
-        ]
-      }
-    }
-    let loser_effects = case other_is_self {
-      True -> []
-      False -> {
-        let attach_msg =
-          message.Replace(
-            event_id:,
-            target_origin: decision.other_origin,
-            max_weight: decision.max_weight,
-            max_edge: decision.max_edge,
-            reversing: False,
-            should_prune: decision.should_prune,
-          )
-        [
-          node.Send(
-            decision.other_next_edge,
-            message.AddMsg(attach_msg, fragment: state.fragment),
-          ),
-        ]
-      }
-    }
-
-    // Wait for both branches to report done before letting the root
-    // move on (a branch whose origin is us completed synchronously
-    // above and never sends an `AddDone`, so it does not count here).
-    let remote_branches =
-      {
-        case target_is_self {
-          True -> 0
-          False -> 1
-        }
-      }
-      + {
-        case other_is_self {
-          True -> 0
-          False -> 1
-        }
-      }
-    let state =
+  // If we are ourselves adjacent to the heaviest edge, drop it and mark the message as
+  // already past the cut.
+  let state = case decision.should_prune && decision.already_at_max_edge {
+    True -> {
+      let assert Ok(info) = dict.get(state.edges, decision.max_edge)
       State(
         ..state,
-        replace_wait_countdown: dict.insert(
-          state.replace_wait_countdown,
-          event_id,
-          remote_branches,
+        edges: dict.insert(
+          state.edges,
+          decision.max_edge,
+          EdgeInfo(..info, status: Undecided, via_addition: False),
         ),
       )
-
-    #(state, list.append(winner_effects, loser_effects))
+    }
+    False -> state
   }
+
+  // If we are ourselves one of the two endpoints of the new edge, promote our own side
+  // locally.
+  let target_is_self = decision.target_origin == state.id
+  let other_is_self = decision.other_origin == state.id
+  let state = case target_is_self || other_is_self {
+    True -> {
+      let assert Ok(info) = dict.get(state.edges, event_id)
+      let updated_info = case decision.should_prune {
+        True ->
+          EdgeInfo(
+            ..info,
+            status: Selected,
+            confirmed: True,
+            via_addition: False,
+          )
+        False -> EdgeInfo(..info, via_addition: False)
+      }
+      State(..state, edges: dict.insert(state.edges, event_id, updated_info))
+    }
+    False -> state
+  }
+
+  let winner_effects = case target_is_self {
+    True -> []
+    False -> {
+      let replace_msg =
+        message.Replace(
+          event_id:,
+          target_origin: decision.target_origin,
+          max_weight: decision.max_weight,
+          max_edge: decision.max_edge,
+          reversing: decision.should_prune && decision.already_at_max_edge,
+          should_prune: decision.should_prune,
+        )
+      [
+        node.Send(
+          decision.next_edge,
+          message.AddMsg(replace_msg, fragment: state.fragment),
+        ),
+      ]
+    }
+  }
+  let loser_effects = case other_is_self {
+    True -> []
+    False -> {
+      let attach_msg =
+        message.Replace(
+          event_id:,
+          target_origin: decision.other_origin,
+          max_weight: decision.max_weight,
+          max_edge: decision.max_edge,
+          reversing: False,
+          should_prune: decision.should_prune,
+        )
+      [
+        node.Send(
+          decision.other_next_edge,
+          message.AddMsg(attach_msg, fragment: state.fragment),
+        ),
+      ]
+    }
+  }
+
+  // Wait for both branches to report done before letting the root move on (a branch whose
+  // origin is us completed synchronously above and never sends an `AddDone`, so it does
+  // not count here).
+  let remote_branches =
+    {
+      case target_is_self {
+        True -> 0
+        False -> 1
+      }
+    }
+    + {
+      case other_is_self {
+        True -> 0
+        False -> 1
+      }
+    }
+  let state =
+    State(
+      ..state,
+      replace_wait_countdown: dict.insert(
+        state.replace_wait_countdown,
+        event_id,
+        remote_branches,
+      ),
+    )
+
+  #(state, list.append(winner_effects, loser_effects))
 }
 
 // --- Helpers -----------------------------------------------------------------
