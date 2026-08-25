@@ -178,7 +178,7 @@ by an abstract random oracle $H$. The implementation instantiates it with SHA-25
 (\texttt{gleam\_crypto}), truncated to its low 64 bits and applied to the edge id
 $(\min(u,v), \max(u,v))$. This is large enough that the $2^{-64}$ false-negative
 probability derived in Chapter~\ref{ch:project} is negligible for any fragment size the
-tests exercise, and it reuses a standard, already-vetted primitive rather than a custom
+tests exercise, and it reuses a standard, already checked primitive rather than a custom
 pseudo-random function. Each node also caches its sorted, hashed incident-edge list
 (\texttt{bs\_candidates}) for the duration of one search, rebuilding it only when the
 search restarts or the incident edge set changes, so that a \textsc{TestOut} round does
@@ -192,10 +192,9 @@ then repeatedly asks for a round of node and edge failures and additions, applie
 them as one overlapping burst with nothing allowed to settle in between, waits for
 convergence, and checks the result against \texttt{graph.kruskal} while reporting the
 message count and wall-clock time for the round. Applying a whole batch of topology
-changes at once, rather than one at a time, is deliberate: it is the piece of validation
-infrastructure that specifically exercises the property Chapter~\ref{ch:project} devotes
-the most space to, namely that concurrent, overlapping topological changes converge
-correctly.
+changes at once, rather than one at a time, is deliberate: it directly validates the
+protocol's ability to safely resolve the concurrent, overlapping network events detailed
+in Chapter~\ref{ch:project}.
 
 \section{Failure protocol: implementation details}
 
