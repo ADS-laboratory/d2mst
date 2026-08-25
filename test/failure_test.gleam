@@ -314,13 +314,6 @@ fn at(items: List(a), i: Int) -> Result(a, Nil) {
 /// Fire one random topology event: fail a link, add a link, join a new
 /// isolated node, or crash a node (kept rare enough to leave >4 nodes
 /// alive, so the run has something left to keep mutating).
-///
-/// Draws the branch out of 7, not 4: `generator.next`'s LCG has a
-/// power-of-2 modulus, so its low bits are degenerate (mod 4 of the raw
-/// state only ever advances by a fixed +1 per draw, and every branch here
-/// consumes a multiple of 4 draws of its own, so `rand_below(seed, 4)`
-/// landed on the same branch for 40 events straight before this was
-/// changed). 7 is coprime to the modulus and mixes far better.
 fn random_event(sim: Sim, seed: Int, next_id: Int) -> #(Sim, Int, Int) {
   let #(pick, seed) = generator.rand_below(seed, 7)
   case pick {

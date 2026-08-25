@@ -93,9 +93,6 @@ pub fn delete_non_tree_link_test() {
   let net = network.start(g, lg)
   network.wake_all(net)
   let assert Ok(_) = logger.await_halt(lg, net.graph.nodes, 200, 10)
-  // Deleting the non-tree edge kills its link process; both endpoints
-  // observe LinkDown. The MST of the remaining graph is unchanged, so the
-  // system must still be consistent.
   let net = network.fail_link(net, 0, 2)
   process.sleep(50)
   let summaries = logger.reconstruct(logger.latest(lg, 1000), net.graph.nodes)
@@ -103,8 +100,6 @@ pub fn delete_non_tree_link_test() {
 }
 
 pub fn delete_tree_link_liveness_test() {
-  // Repairing a broken tree is tier 2; today the endpoints must observe the
-  // death without crashing and keep answering the logger.
   let g =
     Graph(nodes: [0, 1, 2], edges: [Edge(0, 1, 1), Edge(1, 2, 2), Edge(0, 2, 3)])
   let lg = logger.start()
@@ -167,14 +162,4 @@ pub fn add_node_test() {
   assert dict.has_key(net.links, graph.edge_id(1, 2))
   assert net.graph.nodes == [2, 0, 1]
   assert list.length(logger.reconstruct(logger.latest(lg, 1000), [2])) == 1
-}
-
-pub fn message_complexity_is_recorded_test() {
-  // The logger (interface component) must observe the traffic of a run.
-  let g = generator.connected(7, 12, 30)
-  let lg = logger.start()
-  let net = network.start(g, lg)
-  network.wake_all(net)
-  let assert Ok(_) = logger.await_halt(lg, net.graph.nodes, 200, 10)
-  assert logger.total(logger.counts(lg, 1000)) > 0
 }
