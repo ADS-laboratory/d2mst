@@ -11,27 +11,25 @@ runtimes executes it.
 
 \section{The correctness oracle}\label{sec:oracle}
 
-Every test in the suite ultimately reduces to one call: \texttt{sim/oracle.check(graph,
-summaries)}. It compares a converged run against \texttt{graph.kruskal}, a plain
-union-find MST used purely as the exact reference for what "correct" means, and
-accepts the run only if all four of the following hold:
+Every test in the suite ultimately delegates its verification to a single call:
+\texttt{sim/oracle.check(graph, summaries)}. This function validates a converged execution
+against \texttt{graph.kruskal} and accepts the run if and only if all four of the
+following hold:
 
 \begin{itemize}
-  \item every node reports \texttt{halted: True} — the run actually reached quiescence,
-  rather than the check passing vacuously on a system that is still busy;
-  \item the union of every node's reported tree edges equals the edge set returned by
-  \texttt{kruskal};
-  \item the number of nodes reporting \texttt{parent: None} equals the number of connected
-  components of the current graph — exactly one root per fragment, no more and no fewer;
-  \item every non-root node's parent edge is itself one of the reported tree edges, so the
-  parent pointers form an actual rooted forest rather than a set of edges that happens to
-  sum to the right total.
+  \item \textbf{Quiescence:} Every node reports \texttt{halted: True}, guaranteeing that
+  the protocol reached stability;
+  \item \textbf{Edge Set:} The union of all locally reported tree edges is identical to
+  the exact edge set produced by \texttt{kruskal};
+  \item \textbf{Root Count:} The number of nodes reporting \texttt{parent: None} equals
+  the exact number of connected components in the current graph, ensuring precisely one
+  root per fragment;
+  \item \textbf{Structural Integrity:} Every non-root node's parent pointer connects to an
+  active tree edge, confirming that directed parent references form a valid rooted forest.
 \end{itemize}
 
-Because the edge ordering used to break weight ties makes the MST unique even
-under duplicate weights, this check has no ambiguity: there is exactly one
-edge set it can accept, so a passing test is not evidence of \emph{an} acceptable outcome
-but of \emph{the} correct one.
+Because the total edge ordering resolves all weight ties, the reference MST is strictly
+unique: there is exactly one valid topology and edge set that the oracle will accept.
 
 \section{Two execution paths, one protocol}
 
