@@ -199,7 +199,7 @@ correctly.
 
 \section{Failure protocol: implementation details}
 
-The remainder of this chapter completes the description of the failure response protocol
+This section completes the description of the failure response protocol
 given in Chapter~\ref{ch:project}. It covers implementation-level choices that were not
 settled at the design stage.
 
@@ -316,8 +316,8 @@ in Chapter~\ref{ch:project} reaches it.
 
 \section{Addition protocol: implementation details}
 
-To be completed: implementation-level details of the addition response protocol
-(Tier 3), analogous to the failure protocol section above.
+This section completes the description of the addition protocol given in Chapter~\ref{ch:project}. It covers implementation-level choices that were not
+settled at the design stage.
 
 \subsection{Interaction with the addition protocol}\label{sec:failure-addition}
 
@@ -334,4 +334,10 @@ from each other.
 What does require explicit handling is the bookkeeping that an abandoned addition round
 leaves behind, since nothing else revisits it once its messages stop being delivered:
 
-// TODO:
+\begin{itemize}
+  \item \textbf{Clearing stale state:} Whenever a node adopts a new fragment identity—such as during \texttt{start\_reiden\_phase} or the mutual merge branch of \texttt{on\_connect}, it executes \texttt{clear\_addition\_state}. This function wipes all addition-related local storage tied to the old identity, including \texttt{pending\_additions}, \texttt{turn\_routing}, and \texttt{addition\_queue}. Clearing this state prevents stale routing entries from persisting in future protocol events.
+  
+  \item \textbf{Tracking addition edges:} The dropped addition itself must not be permanently forgotten. When a newly established link is first registered by a node, its local \texttt{EdgeInfo} struct is flagged with \texttt{via\_addition: True}.
+  
+  \item \textbf{The retry:} Once the concurrent failure is fully resolved and the fragment returns to quiescence (when the root broadcasts \msg{GoSleep} via \texttt{enter\_sleep} or \texttt{on\_go\_sleep}), every node invokes \texttt{retry\_abandoned\_additions}. This routine scans the node's local edges and sends a fresh \msg{AddTest} for any edge marked \texttt{via\_addition} whose status is not \texttt{Selected}.
+\end{itemize}
