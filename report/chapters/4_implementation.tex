@@ -318,7 +318,47 @@ in Chapter~\ref{ch:project} reaches it.
 This section completes the description of the addition protocol given in Chapter~\ref{ch:project}. It covers implementation-level choices that were not
 settled at the design stage.
 
-\subsection{Interaction with the addition protocol}\label{sec:failure-addition}
+\subsection{Messages by phase}\label{sec:addition-messages}
+
+We describe the concrete messages that carry out each phase of the addition protocol, 
+all constructors of \texttt{AddMsg}:
+
+\begin{itemize}
+  \item \textbf{Fragment discrimination.} \msg{AddTest} carries the sender's fragment
+  identity to the other endpoint of a newly added edge, so each side can decide, on its
+  own and without waiting for a reply, whether the new link creates a cycle inside a
+  fragment or bridges two different ones.
+  \item \textbf{Overlapping-cycle serialization.} \msg{AddRequestTurn} goes from
+  whichever endpoint discovers the cycle up to the root, asking for an
+  addition/merge turn; \msg{Privilege} broadcasts the grant back down the whole tree,
+  since the root does not know which two nodes are the authorized event's endpoints.
+  \item \textbf{LCA search.} \msg{Addition} carries $\langle id, w(e), a, w\rangle$ up
+  from each endpoint toward the root, exactly as in Chapter~\ref{ch:project}; the node
+  that receives two of them for the same \texttt{event\_id} is the LCA.
+  \item \textbf{Topology update.} \msg{Replace} propagates the LCA's decision to the
+  cycle, then \msg{AddDone} convergecasts the completion back up, first to the LCA (which counts
+  down the two branches) and from there up to the root, which can now start a new addition 
+  if one is waiting.
+  \item \textbf{Different-fragment merge.} \msg{AddRequestMergePartition} sends a
+  cross-fragment merge request up to the root exactly like \msg{AddRequestTurn} does for
+  a same-fragment cycle, and \msg{AddApproveMergePartition} broadcasts the root's approval
+  back down; \msg{Connect} (Section~\ref{sec:phase4-impl}) is then sent directly between
+  the two endpoints, reusing the failure protocol's own merge handshake.
+\end{itemize}
+
+\subsection{Root-side serialization of the fragment's turn}\label{sec:addition-turn}
+
+Chapter~\ref{ch:project} gives the root a single fragment-wide turn, granted to one
+addition or merge event at a time. The implementation splits the two request sources into
+separate queues rather than one: \texttt{addition\_queue} is a FIFO of \texttt{event\_id}s
+waiting on an \msg{AddRequestTurn} for a same-fragment cycle, while
+\texttt{pending\_merges} holds cross-fragment \msg{AddRequestMergePartition} requests.
+ When the root becomes free, it always drains
+\texttt{addition\_queue} before ever looking at \texttt{pending\_merges}: a same-fragment
+cycle is waiting for the root grant, while a cross-fragment merge can be deferred
+and even be drop in favour of a later cross-fragment addition with lower weight.
+
+\subsection{Interaction with the failure protocol}\label{sec:failure-addition}
 
 Chapter~\ref{ch:project} leaves open what happens when a tree edge inside an in-progress
 addition's cycle fails while the addition is still running. No dedicated coordination code
