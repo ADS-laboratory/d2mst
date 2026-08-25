@@ -1,3 +1,5 @@
+//// Failure response protocol (Tier 3).
+
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId}
 import d2mst/message.{
@@ -833,10 +835,9 @@ fn on_connect(
       [],
     )
 
-    // Both sides independently chose this edge: merge, tie-break by id. like
-    // The smaller endpoint becomes the root and starts the ReIden wave; the 
-    // larger endpoint records the MOE as its parent and waits for that wave 
-    // like any other child.
+    // Both sides independently chose this edge: merge, tie-break by id. The smaller
+    // endpoint becomes the root and starts the ReIden wave; the larger endpoint records
+    // the MOE as its parent and waits for that wave.
     True -> {
       let new_fragment =
         fragment.D2MCore(
@@ -845,22 +846,12 @@ fn on_connect(
           failures_counter: failure_count(state, from),
         )
       let state = set_status(state, from, Selected)
-      // Both sides have now both sent *and* received a `Connect` for this
-      // edge: mark it mutually confirmed (see `EdgeInfo.confirmed`). This
-      // is what lets `addition.on_edge_test` tell "I've decided but am
-      // still waiting to hear back" (status Selected, not yet confirmed --
-      // keep nudging a peer that may have never gotten its own chance to
-      // decide) apart from "fully done" (confirmed -- ignore stray retries).
+      // Both sides have now both sent and received a `Connect` for this
+      // edge: mark it mutually confirmed.
       let state = set_confirmed(state, from)
       let state = State(..state, fragment: new_fragment)
       case state.id < info.peer {
         True -> start_reiden_phase(State(..state, parent_edge: None))
-        // The smaller-id side clears addition bookkeeping as part of
-        // `start_reiden_phase` above; this side's fragment just changed the
-        // same way, so it needs the same clearing (`clear_addition_state`)
-        // even though it won't call `start_reiden_phase` itself until the
-        // ReIden wave reaches it a moment later -- otherwise there's a
-        // window where a stale local entry and the new fragment id coexist.
         False -> #(
           clear_addition_state(State(..state, parent_edge: Some(from))),
           [],
@@ -893,36 +884,10 @@ fn on_go_sleep(state: State, from: EdgeId) -> #(State, List(Effect)) {
   #(state, list.append(effects, retry_abandoned_additions(state)))
 }
 
-/// A concurrent failure can interrupt an addition round mid-flight: its
-/// fragment identity changes underneath it, so every in-flight
-/// `AddRequestTurn`/`Privilege`/`Replace` message for it gets silently
-/// discarded by the mismatch check the moment it crosses a node that has
-/// already re-identified, and nothing else re-drives it (see
-/// `EdgeInfo.via_addition`). Once this node is quiescent again, re-probe
-/// every such edge fresh.
-///
-/// Checking `status != Selected` rather than `== Undecided`: the repair
-/// this node just went through also runs its own Phase 3 MOE search, which
-/// treats an abandoned addition's edge as an ordinary candidate like any
-/// other and, if both endpoints ended up in the same fragment again, marks
-/// it `Rejected` before we ever get a chance to retry it -- which would
-/// otherwise permanently hide it from this check. This also re-probes
-/// additions that legitimately resolved as a no-op (status left as
-/// whatever it was, not `Selected`, by design). That used to be able to
-/// resurrect a stale `pending_additions[eid]` entry left behind by the
-/// no-op path; `addition.on_replace` now clears that bookkeeping
-/// unconditionally (see `message.Replace`'s `should_prune` field), which
-/// closes that specific case. A related gap is still open, though: a round
-/// abandoned *before* ever reaching its LCA (discarded mid-climb by a
-/// concurrent re-identification, rather than resolved as a no-op) leaves
-/// `pending_additions` entries stranded at whatever relay nodes it had
-/// already passed through, and nothing currently revisits those -- only the
-/// edge's own two endpoints get re-probed here. Confirmed reproducible
-/// (`failure_test.fuzz_long_running_random_topology_test`, seed 1) but not
-/// yet root-caused: the re-probe from this function does resolve the
-/// retried edge correctly and no false-LCA match has been observed, so the
-/// resulting wrong tree traces to something else in that path, still
-/// uncharacterized.
+/// A concurrent failure can interrupt an addition round mid-flight: its fragment identity
+/// changes underneath it, so every in-flight addition message for it gets discarded, and
+/// nothing else re-drives it. Once this node is quiescent again, re-probe every such edge
+/// fresh.
 fn retry_abandoned_additions(state: State) -> List(Effect) {
   dict.to_list(state.edges)
   |> list.filter_map(fn(pair) {

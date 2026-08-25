@@ -77,42 +77,27 @@ pub type AddMsg {
     max_edge: EdgeId,
   )
 
-  /// Dispatched by LCA to prune the heaviest edge and update tree direction[cite: 20].
-  /// `should_prune: False` still travels the full routing path (every
-  /// intermediate node clears its `pending_additions` entry for
-  /// `event_id`, same as the pruning case) but touches no edge status and
-  /// never reverses a parent pointer: a no-op decision still needs its
-  /// stale routing state cleaned up, or a later re-probe of the same edge
-  /// id could mistake a leftover entry for an in-progress round.
+  /// Dispatched by LCA to prune the heaviest edge and update tree direction.
   Replace(
     event_id: EdgeId,
     target_origin: NodeId,
     max_weight: Int,
     max_edge: EdgeId,
     reversing: Bool,
+    /// Should_prune = true when the heaviest edge is the one being added. The replace
+    /// messaege still travels the full routing path to clean up stale state.
     should_prune: Bool,
   )
 
-  /// Sent by whichever endpoint's `AddTest` first discovers `event_id`
-  /// forms a same-fragment cycle, up toward the root, asking for the
-  /// fragment's addition/merge turn *before* either endpoint starts
-  /// climbing to find the cycle (report ch. 3, "Overlapping cycles
-  /// serialization"). Both endpoints independently make this same
-  /// discovery and may each send one; the root dedupes.
+  /// Sent by endpoints to the root to request the fragment's turn for a new
+  /// addition/merge event.
   AddRequestTurn(event_id: EdgeId)
 
-  /// Root -> whole tree: `event_id` has the fragment's turn. Whichever two
-  /// nodes are its endpoints (only they know) start climbing to find the
-  /// cycle's heaviest edge on receipt; every other node just relays it.
-  /// Broadcasting is what lets both endpoints' climbs start regardless of
-  /// which of them originally asked -- see `addition.grant_addition`.
+  /// Sent by the root to authorize the endpoint to execute its addition/merge event.
   Privilege(event_id: EdgeId)
 
-  /// Sent by whichever node finishes a `Replace` chain (winning or losing
-  /// branch), up the standing (possibly just-reversed) parent chain. The
-  /// LCA that coordinated the event counts these down to know when to
-  /// report completion to the root; every other node just relays it
-  /// upward.
+  /// Sent by endpoints to the root to acknowledge that their addition/merge event has
+  /// completed.
   AddDone(event_id: EdgeId)
 }
 
