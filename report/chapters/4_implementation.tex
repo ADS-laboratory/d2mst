@@ -67,7 +67,7 @@ Every module in this layer is a pure function of its inputs; none of them import
   or deferring a message. It contains no protocol logic of its own.
   \item \texttt{ghs.gleam}, \texttt{failure.gleam}, and \texttt{addition.gleam}: the three
   protocol tiers, one module each, all operating on the same \texttt{node.State}. This
-  split keeps Tier 1, 2, and 3 physically separate while letting them share state and the
+  split keeps Tier 1, 2, and 3 almost separated while letting them share state and the
   fragment-identity invariant that makes their concurrent execution safe.
   \item \texttt{algorithm.gleam}: the single exposed entry point,
   \texttt{handle(state, event) -> \#(state, effects)}. It dispatches an event to the
@@ -134,7 +134,7 @@ is driven by something other than a direct function call.
 
 \paragraph{Incremental construction on top of GHS.}
 The implementation was built in two stages: GHS (Tier 1) first, then the dynamic
-repair protocol on top of it. This ordering was not incidental — the dynamic protocol
+repair protocol on top of it. The dynamic protocol
 needs an already-converged spanning tree to operate on, so GHS is kept in the final
 system as the mechanism that constructs that initial tree, rather than being replaced
 once Tier 2/3 were implemented. One consequence of this ordering is that failure and
