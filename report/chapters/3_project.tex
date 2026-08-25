@@ -12,15 +12,16 @@ The implementation is organized as a fully distributed system with one process p
 
 \section{Protocols and Algorithms}
 
-We assume that initially the network has already converged to a minimum directed spanning tree (or
-a set of minimum spanning trees if the network is not connected). The system reacts to
-topological changes by executing a failure response protocol when a tree link fails, and a
-addition response protocol when a new link is added to the network. Here is an overview of how the protocols work:
+We assume that initially the network has already converged to a minimum spanning tree (or
+to a forest of minimum spanning trees if the network is not connected). The system reacts
+to topological changes by executing a failure response protocol when a tree link fails,
+and an addition response protocol when a new link is added to the network. The following
+paragraphs summarize the behavior of these protocols.
 
 This assumption defines the starting point of the dynamic protocols, rather than requiring
 the user to provide an MST externally. During startup, the implementation first constructs
 the initial spanning forest with the distributed GHS algorithm. Only after this
-construction has converged, the failure and addition response protocols process topology
+construction has converged do the failure and addition response protocols process topology
 changes.
 
 \begin{itemize}
@@ -359,8 +360,8 @@ changes have occurred in the meantime, the protocol proceeds identically to GHS:
 merged fragment elects a new root, generates a new identity, and begins a fresh MOE search
 for the next phase of tree construction.
 
-If a concurrent topological change have occurred while this process was in progress, the
-fragment identity mechanism handles them correctly: any messages carrying a superseded
+If a concurrent topological change has occurred while this process was in progress, the
+fragment identity mechanism handles it correctly: any messages carrying a superseded
 identity are silently discarded, and the most recent failure or addition initiates a new
 protocol round with a fresh identity.
 

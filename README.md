@@ -1,30 +1,29 @@
 # d2mst
 
-d2mst (Dynamic-Dystributed Minimum Spanning Tree; pronounced as "d-squared-mst") is a
+d2mst (Dynamic-Distributed Minimum Spanning Tree; pronounced "d-squared-mst") is a
 fully decentralized, self-healing dynamic MST protocol implemented in
-[Gleam](https://gleam.run) on the BEAM. The design is described in `report/`.
+[Gleam](https://gleam.run) on the BEAM.
 
-## Layout
+The project models a distributed network as a set of cooperating node processes that
+maintain and repair a minimum spanning tree under topology changes. The design and
+protocol discussion are in the LaTeX report under `report/`.
 
-- `report/` — LaTeX report (chapters 1–3: problem, analysis, protocol design).
-- `src/d2mst/` — the implementation:
-  - `graph.gleam`, `fragment.gleam`, `message.gleam` — pure model: graph +
-    unique composite weights (Kruskal test oracle), fragment identities,
-    protocol messages;
-  - `node.gleam` — the protocol node: a pure `handle(state, event)` state
-    machine (currently: asynchronous GHS construction) wrapped in a thin
-    OTP actor shell;
-  - `link.gleam` — one actor per edge relaying messages between endpoints;
-    the single place where link failures (and later: drops, delays, crash
-    detection) are injected;
-  - `network.gleam` — spawns nodes and links from a graph and exposes the
-    topology-event API (`fail_link`, `restore_link`, `crash_node`);
-  - `monitor.gleam`, `logger.gleam` — interface components (global snapshot,
-    message counters); the protocol never depends on them.
-- `test/` — gleeunit suite: unit tests, a deterministic process-free
-  protocol runner (`test/sim/runner.gleam`), a seeded random graph
-  generator, and a convergence oracle that compares the distributed result
-  against the unique Kruskal MST.
+## Overview
+
+- `report/` — the project report covering the problem, analysis, protocol,
+  implementation, and validation.
+- `src/d2mst/` — the core protocol and data model:
+  - `graph.gleam` and `fragment.gleam` — graph structure, edge identities, and fragment metadata;
+  - `message.gleam` — protocol message types;
+  - `node.gleam` — the protocol state machine for distributed MST maintenance;
+  - `ghs.gleam` — the GHS-style initial tree construction logic;
+  - `failure.gleam` — the failure response protocol for dynamic link repairs;
+  - `addition.gleam` — the addition response protocol for cycle pruning and partition merges;
+  - `link.gleam` — link actors that relay messages and model failures;
+  - `network.gleam` — topology event API and network setup.
+- `src/engine/` — runtime support for actors, logging, and simulation plumbing.
+- `test/` — a Gleeunit suite with deterministic simulation, topology-event tests,
+  failure/recovery validation, and oracle-based correctness checking.
 
 ## Usage
 
