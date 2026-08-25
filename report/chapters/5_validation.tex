@@ -1,4 +1,240 @@
-\chapter{Validation}
+\chapter{Validation}\label{ch:validation}
 
-Check if requirements from Chapter~\ref{ch:analysis} have been fulfilled.
-Quantitative tests (simulations) and screenshots of the interfaces are put here.
+This chapter checks the implementation against the requirements of
+Chapter~\ref{ch:analysis} and the protocol described in Chapter~\ref{ch:project}. Because
+the protocol's own correctness criterion is exact, a run either converges to \emph{the}
+unique minimum spanning tree of the current graph or it does not, validation is built
+around a single reference check applied uniformly to every scenario, rather than a
+collection of hand-picked expected outputs. What differs from test to test is only how
+that scenario is produced: which topology, which sequence of events, and which of the two
+runtimes executes it.
+
+\section{The correctness oracle}\label{sec:oracle}
+
+Every test in the suite ultimately reduces to one call: \texttt{sim/oracle.check(graph,
+summaries)}. It compares a converged run against \texttt{graph.kruskal}, a plain
+union-find MST used purely as the exact reference for what "correct" means, and
+accepts the run only if all four of the following hold:
+
+\begin{itemize}
+  \item every node reports \texttt{halted: True} — the run actually reached quiescence,
+  rather than the check passing vacuously on a system that is still busy;
+  \item the union of every node's reported tree edges equals the edge set returned by
+  \texttt{kruskal};
+  \item the number of nodes reporting \texttt{parent: None} equals the number of connected
+  components of the current graph — exactly one root per fragment, no more and no fewer;
+  \item every non-root node's parent edge is itself one of the reported tree edges, so the
+  parent pointers form an actual rooted forest rather than a set of edges that happens to
+  sum to the right total.
+\end{itemize}
+
+Because the edge ordering used to break weight ties makes the MST unique even
+under duplicate weights, this check has no ambiguity: there is exactly one
+edge set it can accept, so a passing test is not evidence of \emph{an} acceptable outcome
+but of \emph{the} correct one.
+
+\section{Two execution paths, one protocol}
+
+Every test drives one of two runtimes: the real OTP
+actor system, or \texttt{test/sim/runner.gleam}'s process-free simulator. Both call exactly
+the same \texttt{d2mst/algorithm.handle} on exactly the same protocol modules; the only
+difference is what delivers events to it. The simulator interprets a node's \texttt{Send}
+effects directly into its own FIFO queue instead of onto a real link process, and lets a
+scenario be driven completely deterministically: the same sequence of \texttt{wake},
+\texttt{fail\_link}, \texttt{add\_link}, and \texttt{crash\_node} calls produces the exact
+same interleaving of events every time, and can be stepped one message at a time with
+\texttt{step\_one}.
+
+The actor runtime is not redundant with this. It is the only place where a
+\texttt{LinkDown} is an actual monitored BEAM process dying, rather than an event handed
+directly to the queue, and the only place where two nodes' handlers genuinely run
+concurrently instead of being serialized by a single driving loop. Section~\ref{sec:actor}
+describes what it is used to check that the simulator structurally cannot.
+
+\section{Randomized and regression testing}\label{sec:fuzz}
+
+Fixed graphs catch bugs that are wrong for every input; they are not good for bugs that
+depend on a particular tree shape or a particular pair of overlapping events. To avoid this 
+\texttt{engine/generator.gleam} implements a seeded connected-graph builder: the same seed 
+always produces the same graph, so a fuzz failure is reproducible from its integer seed with 
+no additional state to capture. Most fuzz tests follow the same shape: converge on a batch 
+of seeded topologies, apply a scenario, and check the oracle after every one.
+
+A second group of tests fires several topology events \emph{without settling in between},
+so that their protocol rounds are genuinely concurrent and not just sequential with no gap.
+
+The most targeted tests are fixed, hand-built
+graphs written to reconstruct a specific race the general-purpose fuzzing above did not
+happen to find, and are kept as permanent regression tests once the underlying bug is
+fixed. For example \texttt{overlapping\_cycles\_test} builds two link additions whose cycles genuinely
+share tree edges, exactly the race Chapter~\ref{ch:project}'s "overlapping cycles
+serialization" paragraph describes.
+
+\section{Long-running randomized simulation}\label{sec:long-running}
+
+Chapter~\ref{ch:intro}'s system overview commits the evaluation to, among other scenarios,
+"concurrent random additions and deletions" and "long-running simulations with node and
+edge events occurring at different rates". \texttt{long\_running\_random\_topology\_test}
+is built directly for this: starting from a five-hundred-node random graph, it fires sixty
+topology events, drawn uniformly across failing a random edge, crashing a random node,
+adding a random edge, and joining a new isolated node, biased against crashing below five
+surviving nodes so the run always has something left to mutate, in bursts of five with
+\emph{nothing allowed to settle in between}. The oracle of Section~\ref{sec:oracle} is
+checked after every burst, so a burst of five overlapping events
+must both leave the system in a checkable state and eventually converge correctly, not just
+the final one. \texttt{fuzz\_long\_running\_random\_topology\_test} repeats the same
+procedure from five different starting topologies. 
+
+\section{Interactive demonstration}
+
+\texttt{gleam run} (Appendix~\ref{app:devenv}) is not part of the automated suite, but
+complements it: it builds a random connected graph, brings it to a converged MST, and then
+repeatedly applies
+a whole batch of node and edge failures and additions as one overlapping burst, waits for
+convergence, checks the result against \texttt{graph.kruskal}, and reports the message
+count and wall-clock time for the round.
+
+\section{Message-complexity benchmark}\label{sec:bench}
+
+Chapter~\ref{ch:project} derives $O(|E|)$ message complexity for the naive Phase 3 search
+and $O(N \log N)$ for the binary-search alternative. \texttt{test/bench\_report.gleam} is
+not a \texttt{gleeunit} test, it can be run with:
+
+{\footnotesize
+\begin{verbatim}
+gleam build --target erlang
+erl -pa build/dev/erlang/*/ebin -noshell \
+  -eval "bench_report:run(), halt()."
+\end{verbatim}
+}
+
+For each graph size $N \in \{10, 20, 40, 80, 160, 320\}$ and each burst size $k \in \{1, 2,
+4, 8, 16\}$ (how many tree edges, or non-adjacent pairs, are perturbed at once before the
+network is allowed to settle), the benchmark builds \texttt{seed\_count} $= 15$ random
+graphs, runs the scenario, measures the messages sent between before and after the burst,
+and reports the mean alongside its ratio to the complexity claim's asymptotic term: mean
+$|E|$ for the naive search, $N \log_2 N$ for the binary search, and $N$ for the addition
+protocol. Failure scenarios are measured at two densities, a sparse graph
+($\mathrm{edge\_pct} = 15$) and a dense one ($\mathrm{edge\_pct} = 85$), since the naive
+bound is stated in terms of $|E|$ and the two densities are where that quantity differs
+most from $N$.
+The full sweep, one table per scenario:
+
+{\footnotesize
+\begin{verbatim}
+Failure - naive Phase 3, sparse (edge_pct=15)
+N              k=1           k=2            k=4            k=8            k=16
+--------------------------------------------------------------------------------
+N=10     111.0 (7.9x)  132.8 (9.5x)  150.7 (10.8x)  106.4 (7.6x)              n/a
+N=20     334.7 (7.3x) 477.1 (10.5x)  683.8 (15.0x)  863.0 (18.9x)  899.4 (19.7x)
+N=40    1105.0 (7.4x) 1549.5 (10.3x) 2436.1 (16.3x) 3471.3 (23.2x) 4795.3 (32.0x)
+N=80    3941.5 (7.3x) 5580.8 (10.3x) 8483.7 (15.7x) 12171.3 (22.5x) 17930.3 (33.1x)
+N=160  13979.1 (6.8x) 20334.7 (9.9x) 29249.5 (14.3x) 46246.5 (22.6x) 68519.5 (33.4x)
+N=320  53579.5 (6.7x) 75717.4 (9.5x) 112743.7 (14.1x) 172983.5 (21.7x) 258182.9 (32.4x)
+
+Failure - naive Phase 3, dense (edge_pct=85)
+N              k=1           k=2            k=4            k=8            k=16
+--------------------------------------------------------------------------------
+N=10     265.6 (6.7x)  333.8 (8.4x)  399.3 (10.0x)  427.1 (10.8x)             n/a
+N=20    1011.6 (6.2x) 1229.9 (7.5x)  1565.5 (9.6x) 1926.9 (11.8x) 2140.8 (13.1x)
+N=40    3980.8 (6.0x) 4922.5 (7.4x)  6325.5 (9.5x) 8036.7 (12.1x) 9816.5 (14.7x)
+N=80   14937.9 (5.5x) 18422.4 (6.8x) 22465.1 (8.3x) 28189.5 (10.4x) 36704.1 (13.6x)
+N=160  64180.2 (5.9x) 73621.7 (6.8x) 93659.2 (8.6x) 110659.1 (10.2x) 143435.5 (13.2x)
+N=320 241979.6 (5.6x) 311050.5 (7.2x) 368015.0 (8.5x) 456982.8 (10.5x) 577752.4 (13.3x)
+
+Failure - binary search Phase 3, sparse (edge_pct=15)
+N              k=1           k=2            k=4            k=8            k=16
+--------------------------------------------------------------------------------
+N=10     119.6 (3.6x)  151.5 (4.6x)  173.3 (5.2x)  117.6 (3.5x)              n/a
+N=20     345.9 (4.0x)  571.8 (6.6x)  979.9 (11.3x) 1428.3 (16.5x) 1635.6 (18.9x)
+N=40    1044.3 (4.9x) 1793.1 (8.4x) 3258.5 (15.3x) 5372.4 (25.2x) 8383.4 (39.4x)
+N=80    2587.9 (5.1x) 4742.0 (9.4x) 8891.1 (17.6x) 15617.3 (30.9x) 26616.7 (52.6x)
+N=160   5699.9 (4.9x) 10948.5 (9.3x) 21327.9 (18.2x) 40897.2 (34.9x) 73864.5 (63.1x)
+N=320  13499.3 (5.1x) 26275.0 (9.9x) 50914.7 (19.1x) 97952.9 (36.8x) 186660.3 (70.1x)
+
+Failure - binary search Phase 3, dense (edge_pct=85)
+N              k=1           k=2            k=4            k=8            k=16
+--------------------------------------------------------------------------------
+N=10     187.8 (5.7x)  297.0 (8.9x)  424.6 (12.8x)  479.5 (14.4x)             n/a
+N=20     518.7 (6.0x) 881.5 (10.2x) 1545.9 (17.9x) 2232.6 (25.8x) 2806.1 (32.5x)
+N=40    1326.1 (6.2x) 2412.9 (11.3x) 4407.7 (20.7x) 7547.1 (35.5x) 11555.8 (54.3x)
+N=80    3178.1 (6.3x) 5700.4 (11.3x) 10558.1 (20.9x) 18427.5 (36.4x) 31333.2 (62.0x)
+N=160   6882.9 (5.9x) 13367.6 (11.4x) 26449.0 (22.6x) 49068.5 (41.9x) 89685.5 (76.6x)
+N=320  15734.3 (5.9x) 30885.2 (11.6x) 59553.6 (22.4x) 114585.3 (43.0x) 220605.3 (82.8x)
+
+Addition, edge_pct=40
+N              k=1           k=2            k=4            k=8            k=16
+--------------------------------------------------------------------------------
+N=10      26.7 (2.7x)  55.2 (5.5x)  111.1 (11.1x)  217.7 (21.8x)   438.0 (43.8x)
+N=20      40.6 (2.0x)  84.4 (4.2x)   165.1 (8.3x)  333.6 (16.7x)   678.1 (33.9x)
+N=40      76.8 (1.9x) 147.5 (3.7x)   297.5 (7.4x)  595.9 (14.9x)  1194.7 (29.9x)
+N=80     129.3 (1.6x) 251.7 (3.1x)   500.5 (6.3x)  994.1 (12.4x)  2041.7 (25.5x)
+N=160    227.7 (1.4x) 454.0 (2.8x)   894.3 (5.6x) 1774.6 (11.1x)  3534.5 (22.1x)
+N=320    410.1 (1.3x) 812.1 (2.5x)  1613.9 (5.0x) 3254.2 (10.2x)  6452.5 (20.2x)
+\end{verbatim}
+}
+
+At the lowest concurrency, $k=1$, a single isolated event, which is what
+Chapter~\ref{ch:project}'s complexity derivations actually analyze, both failure tables'
+ratio columns stay close to a constant as $N$ grows by a factor of thirty-two, from $N=10$
+to $N=320$ (naive: roughly $5.5$-$8\times$ in both densities; binary search: roughly
+$4$–$6.3\times$, excluding the $N=10$ sparse outlier discussed below), which is exactly what
+an $O(|E|)$ and an $O(N \log N)$ bound respectively predict. The naive/binary-search
+comparison also confirms the motivation Chapter~\ref{ch:project} gives for the binary-search
+procedure in the first place: at $N=160$, binary search sends $5700$ messages against the
+naive search's $13979$ in the sparse graph ($2.5\times$ fewer), and $6883$ against
+$64180$ in the dense one ($9.3\times$ fewer). The gap widens
+with $N$ too: at $N=320$ binary search is $4.0\times$ fewer messages in the sparse graph and
+$15.4\times$ fewer in the dense one, both wider than at $N=160$. At the
+smallest size, $N=10$, the two are close and binary search is even marginally more expensive
+in the sparse case ($119.6$ against $111.0$): the extra broadcast/convergecast rounds that
+selecting a median a few times costs are not yet paid back by a saving on $|E|$ that is
+still tiny at that size, so the asymptotically better procedure only earns its keep once the
+graph is large enough.
+
+The ratio columns tell us something different. For naive, the $k=8$ ratio climbs with $N$ only up to a point and then flattens:
+$7.6\times$, $18.9\times$, $23.2\times$, $22.5\times$, $22.6\times$, $21.7\times$ across
+$N=10,\dots,320$ in the sparse graph, and just $10.8\times$-$13.6\times$ across the same
+range in the dense one; the $k=16$ column repeats the same shape one notch higher, settling
+around $32$-$33\times$ sparse and $13$-$15\times$ dense from $N=80$ onward. Binary search
+never settles: its $k=8$ ratio keeps climbing across the whole range, from $3.5\times$ to
+$36.8\times$ sparse and $14.4\times$ to $43.0\times$ dense, and $k=16$ climbs even more
+steeply, reaching $70.1\times$ sparse and $82.8\times$ dense at $N=320$. Both bounds are derived for a single, isolated repair event, so this divergence is itself
+evidence that concurrency affects the two strategies differently. Firing $k$ failures without letting
+the system settle in between means a fragment identity change from one repair can hit a
+Phase 3 search already in flight for another, and the implementation restarts such a search
+from scratch.
+
+Naive's Phase 3 search completes in one broadcast-down/convergecast-up pass, so it is
+exposed to this risk only briefly, and a restart repeats work of the same order as the
+search itself, $O(|E|)$. Binary search instead narrows its candidate interval across
+several sequential broadcast/convergecast rounds, and a restart
+discards that narrowed $[a,b]$ interval along with the sample built up over it, forcing the
+search to begin again from an unfiltered scan. A search that stays in flight for more
+rounds is exposed to invalidation for longer, and larger fragments need more such round,
+which would explain why the binary-search ratio keeps growing with $N$ where naive's does
+not.
+
+The addition table shows the opposite trend under concurrency: at $k=8$ the ratio to $N$
+\emph{falls} as $N$ grows, from $21.8\times$ at $N=10$ to $10.2\times$ at $N=320$, at
+$k=16$ it falls from $43.8\times$ to $20.2\times$, and at $k=1$ it falls from $2.7\times$ to
+$1.3\times$, comfortably inside the $O(N)$ bound at every cell. This matches the addition
+protocol's different answer to concurrency: rather than letting an in-progress search be
+invalidated and restarted, same-fragment additions are serialized one at a time behind the
+root's \msg{Privilege} token (Chapter~\ref{ch:project}'s "overlapping cycles
+serialization"), so $k$ concurrent additions cost closer to $k$ times one addition's cost
+plus a fixed coordination overhead, rather than $k$ searches each separately paying a
+restart penalty that grows with how large a fraction of the fragment's search state a
+restart invalidates.
+
+\section{Coverage against the requirements of Chapter~\ref{ch:analysis}}
+
+Fault tolerance and eventual convergence are what the oracle of Section~\ref{sec:oracle}
+checks directly, on every scenario in this chapter; partition tolerance is exercised by
+every test in which a crash or failure actually disconnects the graph and the oracle still
+requires exactly one root per surviving component. Failure transparency follows from
+Section~\ref{sec:actor}'s process-death tests: a node never has to distinguish a crashed
+neighbor from a plain link failure, because \texttt{link.gleam} already reduced one to the
+other before the protocol saw an event. Concurrency transparency is the specific target of
+Section~\ref{sec:fuzz}'s overlapping-event tests and Section~\ref{sec:long-running}'s
+unsettled bursts.
