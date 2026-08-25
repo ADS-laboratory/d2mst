@@ -11,7 +11,6 @@
 //// scenarios are run at two densities
 
 import d2mst/graph.{type Graph}
-import d2mst/message
 import d2mst/node
 import engine/generator
 import gleam/float
@@ -101,8 +100,7 @@ fn oracle_ok(sim: Sim) -> Bool {
   }
 }
 
-/// Panic with which scenario/seed/params failed and why. Any cell that
-/// can't be measured is a bug, not noise to average around.
+/// Panic with which scenario/seed/params failed and why.
 fn fail(
   scenario: String,
   seed: Int,
@@ -126,12 +124,7 @@ fn fail(
   }
 }
 
-/// Step budget for `settle_bounded`: generous relative to every cell this
-/// sweep legitimately produces (the largest observed, naive/dense/N=160/k=8,
-/// needed ~110k `Send` events, well under this), but still finite. A cell
-/// that hits a real protocol livelock (see module doc / benchmark findings)
-/// would otherwise hang the whole sweep forever instead of just dropping
-/// that cell.
+/// Step budget for `settle_bounded`
 const settle_budget = 400_000
 
 fn settle_bounded(sim: Sim, budget: Int) -> Result(Sim, Nil) {
@@ -145,10 +138,7 @@ fn settle_bounded(sim: Sim, budget: Int) -> Result(Sim, Nil) {
   }
 }
 
-/// Fail `k` distinct tree edges at once (no settling in between), then
-/// settle, and report the burst's message cost. Panics if the initial
-/// build didn't converge, there aren't `k` distinct tree edges to hit, or
-/// the repair didn't converge to the correct MST.
+/// Fail `k` distinct tree edges at once, then settle, and report the burst's message cost.
 fn run_failure_cell(
   seed: Int,
   n: Int,
@@ -209,7 +199,7 @@ fn run_failure_cell(
         n,
         edge_pct,
         k,
-        "did not settle within step budget (possible livelock)",
+        "did not settle within step budget",
       )
   }
   let after = runner.sent(sim2)
@@ -234,7 +224,6 @@ fn run_failure_cell(
 }
 
 /// Add `k` edges between distinct non-adjacent pairs at once, then settle.
-/// Panics on the same conditions as `run_failure_cell`.
 fn run_addition_cell(seed: Int, n: Int, edge_pct: Int, k: Int) -> Cell {
   let g = generator.connected(seed, n, edge_pct)
   let sim0 = runner.new(g) |> runner.wake_all |> runner.settle
@@ -312,7 +301,6 @@ fn run_addition_cell(seed: Int, n: Int, edge_pct: Int, k: Int) -> Cell {
 }
 
 /// Pick `k` distinct items out of `items`, order randomized by `seed`.
-/// O(k * len(items)); fine for the small k this benchmark uses.
 fn pick_k(items: List(a), k: Int, seed: Int) -> #(List(a), Int) {
   case k <= 0 {
     True -> #([], seed)
@@ -336,10 +324,6 @@ fn pick_k(items: List(a), k: Int, seed: Int) -> #(List(a), Int) {
   }
 }
 
-/// Debug helper: run one addition cell and expose it as a plain tuple, so
-/// it's easy to call from an `erl -eval` one-liner while isolating a slow
-/// or non-terminating seed. Panics (with the same diagnostic as the full
-/// sweep) if the cell doesn't converge.
 pub fn debug_addition_cell(
   seed: Int,
   n: Int,
@@ -350,7 +334,6 @@ pub fn debug_addition_cell(
   #(c.messages, c.edges, c.components)
 }
 
-/// Same as `debug_addition_cell`, for the failure scenario.
 pub fn debug_failure_cell(
   seed: Int,
   n: Int,
@@ -360,196 +343,6 @@ pub fn debug_failure_cell(
 ) -> #(Int, Int, Int) {
   let c = run_failure_cell(seed, n, edge_pct, k, strategy)
   #(c.messages, c.edges, c.components)
-}
-
-/// Debug helper: replay the same setup as `run_addition_cell` but print a
-/// step trace instead of settling silently, to see what's cycling when a
-/// cell doesn't converge within `total` steps. Only the last `tail` steps
-/// are printed.
-pub fn trace_addition(
-  seed: Int,
-  n: Int,
-  edge_pct: Int,
-  k: Int,
-  total: Int,
-  tail: Int,
-) -> Nil {
-  let g = generator.connected(seed, n, edge_pct)
-  let sim0 = runner.new(g) |> runner.wake_all |> runner.settle
-  let pairs = non_adjacent_pairs(g)
-  let #(picked, seed2) = pick_k(pairs, k, seed)
-  let #(new_edges, _) =
-    list.fold(picked, #([], seed2), fn(acc, pair) {
-      let #(built, seed) = acc
-      let #(u, v) = pair
-      let #(w, seed) = generator.rand_below(seed, 100)
-      #([graph.Edge(u, v, w + 1), ..built], seed)
-    })
-  io.println("edges added: " <> string.inspect(new_edges))
-  let sim1 = list.fold(new_edges, sim0, fn(sim, e) { runner.add_link(sim, e) })
-  trace_loop(sim1, total, tail)
-}
-
-fn trace_loop(sim: Sim, steps_left: Int, tail: Int) -> Nil {
-  case steps_left <= 0 {
-    True ->
-      io.println(
-        "stopped after budget, queue_len="
-        <> int.to_string(list.length(sim.queue)),
-      )
-    False ->
-      case sim.queue {
-        [] -> io.println("settled")
-        [#(target, event), ..] -> {
-          case steps_left <= tail {
-            False -> Nil
-            True ->
-              io.println(
-                int.to_string(steps_left)
-                <> " target="
-                <> int.to_string(target)
-                <> " event="
-                <> string.inspect(event),
-              )
-          }
-          trace_loop(runner.step_one(sim), steps_left - 1, tail)
-        }
-      }
-  }
-}
-
-/// Debug helper: same setup as `trace_addition`/`dump_after_addition`, but
-/// print only `Replace` and `AddDone` deliveries (with receiving node,
-/// event id, target_origin, reversing, should_prune) across the whole run,
-/// to see whether one event's wave or two overlapping events' waves are
-/// responsible for a parent-pointer cycle.
-pub fn trace_replace(
-  seed: Int,
-  n: Int,
-  edge_pct: Int,
-  k: Int,
-  budget: Int,
-) -> Nil {
-  let g = generator.connected(seed, n, edge_pct)
-  let sim0 = runner.new(g) |> runner.wake_all |> runner.settle
-  let pairs = non_adjacent_pairs(g)
-  let #(picked, seed2) = pick_k(pairs, k, seed)
-  let #(new_edges, _) =
-    list.fold(picked, #([], seed2), fn(acc, pair) {
-      let #(built, seed) = acc
-      let #(u, v) = pair
-      let #(w, seed) = generator.rand_below(seed, 100)
-      #([graph.Edge(u, v, w + 1), ..built], seed)
-    })
-  io.println("edges added: " <> string.inspect(new_edges))
-  let sim1 = list.fold(new_edges, sim0, fn(sim, e) { runner.add_link(sim, e) })
-  trace_replace_loop(sim1, budget, 1)
-}
-
-fn trace_replace_loop(sim: Sim, steps_left: Int, step_no: Int) -> Nil {
-  case steps_left <= 0 {
-    True -> io.println("stopped after budget")
-    False ->
-      case sim.queue {
-        [] -> io.println("settled at step " <> int.to_string(step_no))
-        [#(target, event), ..] -> {
-          case event {
-            node.Receive(
-              _,
-              message.AddMsg(
-                message.Replace(
-                  event_id:,
-                  target_origin:,
-                  reversing:,
-                  should_prune:,
-                  max_edge:,
-                  ..,
-                ),
-                ..,
-              ),
-            ) ->
-              io.println(
-                "#"
-                <> int.to_string(step_no)
-                <> " Replace node="
-                <> int.to_string(target)
-                <> " event="
-                <> string.inspect(event_id)
-                <> " target_origin="
-                <> int.to_string(target_origin)
-                <> " reversing="
-                <> string.inspect(reversing)
-                <> " should_prune="
-                <> string.inspect(should_prune)
-                <> " max_edge="
-                <> string.inspect(max_edge),
-              )
-            node.Receive(_, message.AddMsg(message.AddDone(event_id:), ..)) ->
-              io.println(
-                "#"
-                <> int.to_string(step_no)
-                <> " AddDone node="
-                <> int.to_string(target)
-                <> " event="
-                <> string.inspect(event_id),
-              )
-            _ -> Nil
-          }
-          trace_replace_loop(runner.step_one(sim), steps_left - 1, step_no + 1)
-        }
-      }
-  }
-}
-
-/// Debug helper: same setup as `trace_addition`, but run `steps` silently
-/// then dump every node's `(id, parent, fragment)` to inspect the tree
-/// shape mid-repair.
-pub fn dump_after_addition(
-  seed: Int,
-  n: Int,
-  edge_pct: Int,
-  k: Int,
-  steps: Int,
-) -> Nil {
-  let g = generator.connected(seed, n, edge_pct)
-  let sim0 = runner.new(g) |> runner.wake_all |> runner.settle
-  let pairs = non_adjacent_pairs(g)
-  let #(picked, seed2) = pick_k(pairs, k, seed)
-  let #(new_edges, _) =
-    list.fold(picked, #([], seed2), fn(acc, pair) {
-      let #(built, seed) = acc
-      let #(u, v) = pair
-      let #(w, seed) = generator.rand_below(seed, 100)
-      #([graph.Edge(u, v, w + 1), ..built], seed)
-    })
-  io.println("edges added: " <> string.inspect(new_edges))
-  let sim1 = list.fold(new_edges, sim0, fn(sim, e) { runner.add_link(sim, e) })
-  let sim2 = run_n_steps(sim1, steps)
-  io.println("queue_len=" <> int.to_string(list.length(sim2.queue)))
-  runner.summaries(sim2)
-  |> list.each(fn(s) {
-    io.println(
-      "node="
-      <> int.to_string(s.id)
-      <> " parent="
-      <> string.inspect(s.parent)
-      <> " ns="
-      <> string.inspect(s.state)
-      <> " halted="
-      <> string.inspect(s.halted),
-    )
-  })
-}
-
-fn run_n_steps(sim: Sim, n: Int) -> Sim {
-  case n <= 0 {
-    True -> sim
-    False ->
-      case sim.queue {
-        [] -> sim
-        _ -> run_n_steps(runner.step_one(sim), n - 1)
-      }
-  }
 }
 
 fn non_adjacent_pairs(g: Graph) -> List(#(Int, Int)) {
@@ -643,19 +436,24 @@ fn failure_table(
   list.each(sizes, fn(n) {
     let row =
       list.map(concurrencies, fn(k) {
-        let s =
-          average_cell(n, edge_pct, k, fn(seed, n, edge_pct, k) {
-            run_failure_cell(seed, n, edge_pct, k, strategy)
-          })
-        let bound = case strategy {
-          node.Naive -> s.mean_edges
-          node.BinarySearch(_) -> int.to_float(n) *. log2(n)
+        case k > n - 1 {
+          True -> string.pad_start("n/a", 20, " ")
+          False -> {
+            let s =
+              average_cell(n, edge_pct, k, fn(seed, n, edge_pct, k) {
+                run_failure_cell(seed, n, edge_pct, k, strategy)
+              })
+            let bound = case strategy {
+              node.Naive -> s.mean_edges
+              node.BinarySearch(_) -> int.to_float(n) *. log2(n)
+            }
+            let ratio = case bound >. 0.0 {
+              True -> s.mean_messages /. bound
+              False -> 0.0
+            }
+            string.pad_start(cell_text(s, ratio), 20, " ")
+          }
         }
-        let ratio = case bound >. 0.0 {
-          True -> s.mean_messages /. bound
-          False -> 0.0
-        }
-        string.pad_start(cell_text(s, ratio), 20, " ")
       })
       |> string.join("")
     io.println(string.pad_end("N=" <> int.to_string(n), 8, " ") <> row)
