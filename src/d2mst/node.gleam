@@ -1,5 +1,5 @@
-//// The node state data structure for the D2MST protocol and some helper 
-//// functions to manipulate it.
+//// The node state data structure for the D2MST protocol and some helper functions to
+//// manipulate it.
 
 import d2mst/fragment.{type FragmentId}
 import d2mst/graph.{type Edge, type EdgeId, type NodeId}
@@ -22,8 +22,7 @@ pub type D2MNodeState {
 /// Which Phase 3 (minimum outgoing edge search) procedure a node runs.
 pub type MoeStrategy {
   Naive
-  /// `sample_k`: number of edges sampled at each round in order to estimate
-  /// the median
+  /// `sample_k`: number of edges sampled at each round in order to estimate the median.
   BinarySearch(sample_k: Int)
 }
 
@@ -44,18 +43,15 @@ pub type EdgeStatus {
   Rejected
 }
 
+/// The node view of its edges.
 pub type EdgeInfo {
-  /// `via_addition`: this edge was registered through the Tier 3
-  /// `addition.add_edge` entry point rather than present from `init`. Used
-  /// purely to retry an addition round abandoned mid-flight by a
-  /// concurrent failure (see `d2m.retry_abandoned_additions`): once this
-  /// node is quiescent again, any incident edge that is still `Undecided`
-  /// *and* came in this way gets re-probed with a fresh `AddTest`, since
-  /// nothing else re-drives it after the fragment-mismatch discard.
   EdgeInfo(
+    /// The other endpoint of this edge.
     peer: NodeId,
     edge: Edge,
     status: EdgeStatus,
+    /// whether this edge was added during runtime rather than present from init. Used to
+    /// retry abandoned addition rounds after a concurrent failure.
     via_addition: Bool,
     /// An edge is confirmed once both endpoints have sent and received a `Connect` (it is
     /// Selected on both sides).
@@ -64,13 +60,6 @@ pub type EdgeInfo {
 }
 
 /// What an LCA decides once both `Addition` branches converge on it.
-/// Acted on immediately (see `addition.execute_decision`): the root's
-/// `Privilege` broadcast already authorized this event's whole round before
-/// either endpoint started climbing, so there is no later turn left to wait
-/// for. `target_origin`/`next_edge` name the branch that reported the
-/// cycle's heaviest edge (which gets pruned); `other_origin`/
-/// `other_next_edge` name the other branch (which only needs its own side
-/// of the new edge attached, no pruning or reversal).
 pub type ReplaceDecision {
   ReplaceDecision(
     should_prune: Bool,
@@ -84,9 +73,7 @@ pub type ReplaceDecision {
   )
 }
 
-/// Root-side: what currently occupies the fragment's one addition/merge
-/// turn. See `State.addition_active` for why this must be tagged rather
-/// than a bare `EdgeId`.
+/// Root-side: what currently occupies the fragment's one addition/merge turn.
 pub type ActiveTurn {
   RunningAddition(event_id: EdgeId)
   RunningMerge(add_edge: EdgeId)
@@ -110,8 +97,6 @@ pub type State {
     // - `find_countdown` counts how many children have not yet reported their best
     //   outgoing weight.
     // - `repair_countdown` counts how many children have not yet reported during repair.
-    // Potentially a single countdown could be used for both, but I think it is clearer to
-    // keep them separate.
     find_countdown: Int,
     repair_countdown: Int,
     halted: Bool,
@@ -129,44 +114,18 @@ pub type State {
     /// order and each paired with its hash
     bs_candidates: Option(List(#(EdgeId, EdgeInfo, Int))),
     /// Pending additions, waiting for the other branch to arrive at the LCA.
-    /// The third element is the fragment id this node had when the entry
-    /// was stored: a re-identification (Phase 1/2, or `d2m.on_connect`'s
-    /// merge) clears these outright (see `clear_addition_state`).
-    ///
-    /// Only ever populated while `addition_active` holds this event's
-    /// `RunningAddition` -- the root grants one same-fragment addition
-    /// event a fragment-wide turn *before* either endpoint starts climbing
-    /// (see `addition.on_edge_test` / `addition.grant_addition`), so no
-    /// other addition event's climb or `Replace` wave can be touching the
-    /// tree while this one runs. That is what makes a plain "first arrival
-    /// stores, second arrival is the LCA" check sufficient here: with only
-    /// one event live at a time, a stored entry can only ever belong to
-    /// this same event's other branch.
     pending_additions: Dict(EdgeId, #(message.AddMsg, EdgeId, FragmentId)),
     /// LCA-side: how many of the two branches' `AddDone` acks are still
     /// outstanding for an event currently being executed.
     replace_wait_countdown: Dict(EdgeId, Int),
-    /// Root-side: same-fragment addition events waiting for a turn, in
-    /// arrival order. Queued the moment `AddTest` discovers the cycle --
-    /// before either endpoint climbs, not after a decision is already
-    /// made -- so the whole climb-decide-execute round runs as one
-    /// fragment-wide critical section (see `ActiveTurn`).
+    /// Tracks how many AddDone acknowledgment messages are still expected from the two
+    /// branches involved in a cycle addition/replacement event currently being executed.
     addition_queue: List(EdgeId),
-    /// Root-side: whichever single thing -- a same-fragment addition event
-    /// running its whole round, or a cross-fragment merge -- currently owns
-    /// the fragment's one addition/merge turn. Tagged (not a bare `EdgeId`)
-    /// so `preempt_or_keep` can tell the two apart: a merge may preempt
-    /// another merge (the tie-break both roots must agree on without
-    /// talking), but must never preempt a same-fragment round, or the
-    /// round's still-in-flight climb/`Replace` messages would go on
-    /// mutating the tree after the root has already moved on to something
-    /// else, reopening exactly the concurrent-mutation races this
-    /// serialization exists to prevent.
+    /// What addition/merge event is currently being executed, if any. Only one can be
+    /// active at a time.
     addition_active: Option(ActiveTurn),
-    /// Root-side: cross-fragment merge requests that arrived while
-    /// `addition_active` was already busy with something else and lost
-    /// `preempt_or_keep`'s tie-break, in arrival order. Retried, one at a
-    /// time, every time `addition_active` frees up
+    /// Cross-fragment merge requests that arrived while `addition_active` was already
+    /// busy with something else.
     pending_merges: List(EdgeId),
   )
 }
@@ -191,9 +150,8 @@ pub type Effect {
   Send(on: EdgeId, msg: message.Msg)
 }
 
-/// `incident` lists the graph edges this node is an endpoint of. Runs
-/// Phase 3's naive MOE search; use `init_with_strategy` to opt into the
-/// binary search variant.
+/// `incident` lists the graph edges this node is an endpoint of. Runs Phase 3's naive MOE
+/// search; use `init_with_strategy` to opt into the binary search variant.
 pub fn init(id: NodeId, incident: List(Edge)) -> State {
   init_with_strategy(id, incident, Naive)
 }
@@ -273,7 +231,7 @@ pub fn add_edge(state: State, edge: Edge) -> State {
   )
 }
 
-/// how many times this edge has failed so far.
+/// How many times this edge has failed so far.
 pub fn failure_count(state: State, on: EdgeId) -> Int {
   case dict.get(state.failure_counts, on) {
     Ok(k) -> k
@@ -281,7 +239,7 @@ pub fn failure_count(state: State, on: EdgeId) -> Int {
   }
 }
 
-/// Record one more failure of `on` and return the new count
+/// Record one more failure of `on` and return the new count.
 pub fn bump_failure_count(state: State, on: EdgeId) -> #(State, Int) {
   let k = failure_count(state, on) + 1
   #(State(..state, failure_counts: dict.insert(state.failure_counts, on, k)), k)
@@ -289,8 +247,8 @@ pub fn bump_failure_count(state: State, on: EdgeId) -> #(State, Int) {
 
 // --- helpers ---------------------------------------------------------------
 
-// Put a message in the pending queue to be retried later. The message is
-// not sent now, so the caller must not send it either.
+/// Put a message in the pending queue to be retried later. The message is not sent now,
+/// so the caller must not send it either.
 pub fn defer(state: State, on: EdgeId, msg: message.Msg) -> State {
   State(..state, pending: [#(on, msg), ..state.pending])
 }
@@ -303,8 +261,8 @@ pub fn set_status(state: State, eid: EdgeId, status: EdgeStatus) -> State {
   )
 }
 
-/// Marks an edge's cross-fragment merge as mutually confirmed: this side
-/// has both sent and received a `Connect` for it. See `EdgeInfo.confirmed`.
+/// Marks an edge's cross-fragment merge as mutually confirmed: this side has both sent
+/// and received a `Connect` for it.
 pub fn set_confirmed(state: State, eid: EdgeId) -> State {
   let assert Ok(info) = dict.get(state.edges, eid)
   State(
@@ -331,9 +289,9 @@ pub fn min_edge(state: State, keep: fn(EdgeInfo) -> Bool) -> Option(EdgeId) {
   |> option.map(fn(p) { p.0 })
 }
 
-/// Exposed for `logger.summarise`: the branch edges a node currently knows
-/// about, excluding `except` (the edge a Halt/Notify arrived on, so it is
-/// not echoed back where it came from).
+/// Exposed for `logger.summarise`: the branch edges a node currently knows about,
+/// excluding `except` (the edge a Halt/Notify arrived on, so it is not echoed back where
+/// it came from).
 pub fn branch_edges_except(
   state: State,
   except: Option(EdgeId),
@@ -348,8 +306,8 @@ pub fn branch_edges_except(
   })
 }
 
-/// Clear addition state when this node adopts a new fragment identity. Messages from the
-/// old round will be rejected by the fragment check, so keeping the local bookkeeping
+/// Clear addition state when this node change fragment identity. Messages from the old
+/// round will be rejected by the fragment check, so keeping the local addition state
 /// would leave the node waiting for an event that can no longer arrive.
 pub fn clear_addition_state(state: State) -> State {
   State(
