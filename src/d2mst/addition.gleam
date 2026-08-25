@@ -218,7 +218,7 @@ pub fn on_addition(
       // We are the LCA. Now we update the topology. `winner` is the branch that reported
       // the larger running max (the one that holds the cycle's heaviest edge); `other_*`
       // is the losing branch's own origin/routing edge, needed below to attach *its* side
-      // of the new edge too. TODO: other_ is needed for what?
+      // of the new edge too.
       let winner_is_first =
         graph.edge_less(
           graph.Edge(updated_max_edge.low, updated_max_edge.high, updated_max),
@@ -688,7 +688,6 @@ fn merge(
       let updated_info = EdgeInfo(..edge_info, status: Selected)
       let state =
         State(..state, edges: dict.insert(state.edges, edge_id, updated_info))
-      // TODO: is it ok to use the failure connect logic?
       let envelope =
         message.D2MMsg(msg: message.Connect, fragment: state.fragment)
       #(state, [Send(edge_id, envelope), ..effects])

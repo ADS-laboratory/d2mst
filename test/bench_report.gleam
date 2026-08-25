@@ -193,14 +193,7 @@ fn run_failure_cell(
   let sim2 = case settle_bounded(sim1, settle_budget) {
     Ok(s) -> s
     Error(_) ->
-      fail(
-        scenario,
-        seed,
-        n,
-        edge_pct,
-        k,
-        "did not settle within step budget",
-      )
+      fail(scenario, seed, n, edge_pct, k, "did not settle within step budget")
   }
   let after = runner.sent(sim2)
   case oracle_ok(sim2) {
