@@ -21,3 +21,6 @@ erl_crash.dump
 *.toc
 *.lof
 *.lot
+
+# Local tooling
+.claude/
